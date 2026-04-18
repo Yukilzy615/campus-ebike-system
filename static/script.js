@@ -6949,7 +6949,7 @@ function handleLogin() {
 
 
 
-        document.getElementById('currentUser').textContent = role === 'admin' ? '管理常' : '调度常';
+        document.getElementById('currentUser').textContent = role === 'admin' ? '管理员' : '调度常';
 
 
 
@@ -8318,9 +8318,568 @@ function generateAIPriority() {
     }
 }
 
-// 开始自定义截图
-function startCustomScreenshot() {
-    alert('截图功能开发中');
+// 开始自定义截图（QQ/微信式区域截图）
+function waitForNextPaint() {
+    return new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
+}
+
+function getViewportSize() {
+    const vv = window.visualViewport;
+    const width = Math.round(
+        (vv && vv.width) ||
+        window.innerWidth ||
+        document.documentElement.clientWidth ||
+        0
+    );
+    const height = Math.round(
+        (vv && vv.height) ||
+        window.innerHeight ||
+        document.documentElement.clientHeight ||
+        0
+    );
+    return {
+        width: Math.max(1, width),
+        height: Math.max(1, height)
+    };
+}
+
+function prepareSelectMirrorsForScreenshot() {
+    const records = [];
+    const selects = Array.from(document.querySelectorAll('select'));
+
+    selects.forEach(select => {
+        const rect = select.getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2) {
+            return;
+        }
+
+        const style = window.getComputedStyle(select);
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+            return;
+        }
+
+        const selectedText = select.options[select.selectedIndex]
+            ? select.options[select.selectedIndex].text
+            : (select.value || '');
+
+        const mirror = document.createElement('div');
+        mirror.textContent = selectedText;
+        Object.assign(mirror.style, {
+            position: 'fixed',
+            left: rect.left + 'px',
+            top: rect.top + 'px',
+            width: rect.width + 'px',
+            height: rect.height + 'px',
+            boxSizing: 'border-box',
+            border: style.border,
+            borderRadius: style.borderRadius,
+            background: style.background,
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            font: style.font,
+            lineHeight: style.lineHeight,
+            paddingTop: style.paddingTop,
+            paddingRight: style.paddingRight,
+            paddingBottom: style.paddingBottom,
+            paddingLeft: style.paddingLeft,
+            display: 'flex',
+            alignItems: 'center',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+            textOverflow: 'ellipsis',
+            zIndex: '999998',
+            pointerEvents: 'none'
+        });
+
+        document.body.appendChild(mirror);
+        records.push({
+            select,
+            mirror,
+            prevVisibility: select.style.visibility
+        });
+
+        // 原生 select 在 html2canvas 中常丢文字，临时隐藏并用镜像占位
+        select.style.visibility = 'hidden';
+    });
+
+    return function restoreSelectMirrors() {
+        records.forEach(record => {
+            record.select.style.visibility = record.prevVisibility;
+            record.mirror.remove();
+        });
+    };
+}
+
+function normalizeBaiduMapForScreenshot() {
+    // 注意：不再对百度地图子节点做 transform/left/top 归一化——那样会把依赖
+    // translate 的瓦片和覆盖物（热力、marker 等）立刻推到错位/不可见的位置，
+    // 造成"一点击截图图层就消失"的 Bug。主链路改用 getDisplayMedia 捕获真实像素。
+    return function noop() {};
+}
+
+async function captureViewportViaDisplayMedia() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error('当前浏览器不支持屏幕捕获 API');
+    }
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: 'browser', frameRate: 30 },
+        audio: false,
+        preferCurrentTab: true,
+        selfBrowserSurface: 'include',
+        surfaceSwitching: 'exclude',
+        systemAudio: 'exclude'
+    });
+
+    try {
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.srcObject = stream;
+        await new Promise((resolve, reject) => {
+            video.onloadedmetadata = resolve;
+            video.onerror = () => reject(new Error('视频帧加载失败'));
+        });
+        await video.play();
+        // 留一帧让视频真正解码到可用画面
+        await new Promise(r => setTimeout(r, 120));
+
+        const sw = video.videoWidth;
+        const sh = video.videoHeight;
+        if (!sw || !sh) throw new Error('未获取到捕获帧');
+
+        const viewport = getViewportSize();
+        const vw = viewport.width;
+        const vh = viewport.height;
+
+        // 捕获源可能是整个窗口/屏幕；按视口宽高比裁剪出当前可视区
+        const targetRatio = vw / vh;
+        const srcRatio = sw / sh;
+        let sx = 0, sy = 0, cw = sw, ch = sh;
+        if (srcRatio > targetRatio) {
+            cw = Math.round(sh * targetRatio);
+            sx = Math.round((sw - cw) / 2);
+        } else if (srcRatio < targetRatio) {
+            ch = Math.round(sw / targetRatio);
+            sy = Math.round((sh - ch) / 2);
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = cw;
+        canvas.height = ch;
+        canvas.getContext('2d').drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
+        return canvas;
+    } finally {
+        stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
+    }
+}
+
+async function capturePageViaHtml2Canvas() {
+    if (typeof html2canvas !== 'function') {
+        throw new Error('html2canvas 组件未加载');
+    }
+
+    const docEl = document.documentElement;
+    const body = document.body;
+    const viewport = getViewportSize();
+
+    // 仅按可视宽度捕获，避免出现横向滚动条导致截图层底部/右侧出现缝隙
+    const pageWidth = Math.max(
+        viewport.width,
+        docEl ? docEl.clientWidth : 0,
+        body ? body.clientWidth : 0
+    );
+    const pageHeight = Math.max(
+        viewport.height,
+        docEl ? docEl.scrollHeight : 0,
+        docEl ? docEl.clientHeight : 0,
+        body ? body.scrollHeight : 0,
+        body ? body.clientHeight : 0
+    );
+
+    const restoreSelectMirrors = prepareSelectMirrorsForScreenshot();
+    await waitForNextPaint();
+    try {
+        const canvas = await html2canvas(document.body, {
+            useCORS: true, allowTaint: true, logging: false,
+            backgroundColor: null,
+            scale: window.devicePixelRatio || 1,
+            windowWidth: pageWidth,
+            windowHeight: pageHeight,
+            x: 0,
+            y: 0,
+            scrollX: 0,
+            scrollY: 0,
+            width: pageWidth,
+            height: pageHeight,
+            ignoreElements: (el) => {
+                if (el.dataset && el.dataset.screenshotIgnore === '1') return true;
+                if (el.id === 'progress-overlay') return true;
+                if (el.classList && (el.classList.contains('fixed-screenshot-btn') || el.classList.contains('toast'))) return true;
+                return false;
+            }
+        });
+        return {
+            canvas,
+            displayWidth: pageWidth,
+            displayHeight: pageHeight
+        };
+    } finally {
+        restoreSelectMirrors();
+    }
+}
+
+async function startCustomScreenshot() {
+    const btn = document.querySelector('.fixed-screenshot-btn');
+    const prevBtnDisplay = btn ? btn.style.display : '';
+    if (btn) btn.style.display = 'none';
+    const restoreBtn = () => { if (btn) btn.style.display = prevBtnDisplay; };
+
+    const tip = document.createElement('div');
+    tip.dataset.screenshotIgnore = '1';
+    tip.textContent = '正在准备截图…';
+    Object.assign(tip.style, {
+        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+        background: 'rgba(0,0,0,0.7)', color: '#fff', padding: '10px 18px',
+        borderRadius: '6px', zIndex: 1000000, fontSize: '14px', pointerEvents: 'none'
+    });
+    document.body.appendChild(tip);
+
+    const supportsDisplayMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)
+        && (window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+
+    let captureResult = null;
+    let lastErr = null;
+
+    const viewport = getViewportSize();
+    const docEl = document.documentElement;
+    const body = document.body;
+    const pageHeight = Math.max(
+        viewport.height,
+        docEl ? docEl.scrollHeight : 0,
+        docEl ? docEl.clientHeight : 0,
+        body ? body.scrollHeight : 0,
+        body ? body.clientHeight : 0
+    );
+    const viewportHeight = viewport.height;
+    const needFullPageSelection = pageHeight > viewportHeight + 4;
+
+    if (supportsDisplayMedia && !needFullPageSelection) {
+        try {
+            tip.remove();
+            const canvas = await captureViewportViaDisplayMedia();
+            captureResult = {
+                canvas,
+                displayWidth: viewport.width,
+                displayHeight: viewport.height
+            };
+        } catch (err) {
+            lastErr = err;
+            // 用户取消则直接退出
+            if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+                restoreBtn();
+                return;
+            }
+        }
+    } else {
+        tip.remove();
+    }
+
+    if (!captureResult) {
+        const tip2 = document.createElement('div');
+        tip2.dataset.screenshotIgnore = '1';
+        tip2.textContent = '正在生成截图…';
+        Object.assign(tip2.style, {
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+            background: 'rgba(0,0,0,0.7)', color: '#fff', padding: '10px 18px',
+            borderRadius: '6px', zIndex: 1000000, fontSize: '14px', pointerEvents: 'none'
+        });
+        document.body.appendChild(tip2);
+        try {
+            captureResult = await capturePageViaHtml2Canvas();
+        } catch (err) {
+            lastErr = err;
+        } finally {
+            tip2.remove();
+        }
+    }
+
+    if (!captureResult || !captureResult.canvas) {
+        restoreBtn();
+        alert('截图失败：' + (lastErr && lastErr.message ? lastErr.message : '未知错误'));
+        return;
+    }
+
+    openScreenshotOverlay(captureResult, restoreBtn);
+}
+
+function openScreenshotOverlay(captureResult, onClose) {
+    const srcCanvas = captureResult.canvas;
+    const viewportSize = getViewportSize();
+    const vw = viewportSize.width;
+    const vh = viewportSize.height;
+    const displayWidth = Math.max(vw, Number(captureResult.displayWidth) || vw);
+    const displayHeight = Math.max(vh, Number(captureResult.displayHeight) || vh);
+    const scaleX = srcCanvas.width / displayWidth;
+    const scaleY = srcCanvas.height / displayHeight;
+
+    const overlay = document.createElement('div');
+    overlay.dataset.screenshotIgnore = '1';
+    Object.assign(overlay.style, {
+        position: 'fixed', left: 0, top: 0, right: 0, bottom: 0,
+        width: 'auto', height: 'auto',
+        zIndex: 999999, userSelect: 'none',
+        background: 'rgba(0,0,0,0.5)'
+    });
+
+    const needScroll = displayHeight > vh + 1 || displayWidth > vw + 1;
+
+    const viewport = document.createElement('div');
+    Object.assign(viewport.style, {
+        position: 'absolute',
+        inset: '0',
+        overflowY: needScroll ? 'auto' : 'hidden',
+        overflowX: 'hidden',
+        cursor: 'crosshair'
+    });
+    overlay.appendChild(viewport);
+
+    const stage = document.createElement('div');
+    Object.assign(stage.style, {
+        position: 'relative',
+        width: needScroll ? displayWidth + 'px' : '100%',
+        height: needScroll ? displayHeight + 'px' : '100%',
+        minWidth: '100%',
+        minHeight: '100%'
+    });
+    viewport.appendChild(stage);
+
+    const bg = document.createElement('canvas');
+    bg.width = Math.round(displayWidth);
+    bg.height = Math.round(displayHeight);
+    Object.assign(bg.style, {
+        position: 'absolute', left: 0, top: 0,
+        width: displayWidth + 'px',
+        height: displayHeight + 'px',
+        pointerEvents: 'none'
+    });
+    const bgCtx = bg.getContext('2d');
+    bgCtx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, 0, 0, bg.width, bg.height);
+    stage.appendChild(bg);
+
+    const mask = document.createElement('div');
+    Object.assign(mask.style, { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', pointerEvents: 'none' });
+    stage.appendChild(mask);
+
+    const sel = document.createElement('div');
+    Object.assign(sel.style, {
+        position: 'absolute', border: '1px dashed #1e90ff', boxSizing: 'border-box',
+        display: 'none', overflow: 'hidden', pointerEvents: 'none'
+    });
+    const selCanvas = document.createElement('canvas');
+    Object.assign(selCanvas.style, { display: 'block', position: 'absolute' });
+    sel.appendChild(selCanvas);
+
+    const sizeLabel = document.createElement('div');
+    Object.assign(sizeLabel.style, {
+        position: 'absolute', top: '-22px', left: '0', background: 'rgba(0,0,0,0.6)',
+        color: '#fff', fontSize: '12px', padding: '2px 6px', borderRadius: '3px', whiteSpace: 'nowrap'
+    });
+    sel.appendChild(sizeLabel);
+    stage.appendChild(sel);
+
+    const toolbar = document.createElement('div');
+    Object.assign(toolbar.style, {
+        position: 'absolute', display: 'none', background: '#2c2c2c', borderRadius: '6px',
+        padding: '6px 8px', boxShadow: '0 2px 8px rgba(0,0,0,0.4)', zIndex: 2,
+        display: 'none'
+    });
+    const mkBtn = (text, color) => {
+        const b = document.createElement('button');
+        b.textContent = text;
+        Object.assign(b.style, {
+            margin: '0 4px', padding: '5px 12px', border: 'none', borderRadius: '4px',
+            background: color || '#444', color: '#fff', cursor: 'pointer', fontSize: '13px'
+        });
+        return b;
+    };
+    const btnCopy = mkBtn('复制', '#1e90ff');
+    const btnSave = mkBtn('保存', '#28a745');
+    const btnCancel = mkBtn('取消', '#6c757d');
+    toolbar.appendChild(btnCopy);
+    toolbar.appendChild(btnSave);
+    toolbar.appendChild(btnCancel);
+    stage.appendChild(toolbar);
+
+    document.body.appendChild(overlay);
+
+    let startX = 0, startY = 0, curX = 0, curY = 0, dragging = false, hasSelection = false;
+
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+    const toStagePos = (evt) => {
+        const rect = stage.getBoundingClientRect();
+        const x = clamp(evt.clientX - rect.left, 0, displayWidth);
+        const y = clamp(evt.clientY - rect.top, 0, displayHeight);
+        return { x, y };
+    };
+
+    const getRect = () => {
+        const x = Math.min(startX, curX), y = Math.min(startY, curY);
+        const w = Math.abs(curX - startX), h = Math.abs(curY - startY);
+        return { x, y, w, h };
+    };
+
+    const renderSelection = () => {
+        const r = getRect();
+        if (r.w < 2 || r.h < 2) { sel.style.display = 'none'; return; }
+        sel.style.display = 'block';
+        sel.style.left = r.x + 'px';
+        sel.style.top = r.y + 'px';
+        sel.style.width = r.w + 'px';
+        sel.style.height = r.h + 'px';
+        selCanvas.width = Math.max(1, Math.round(r.w * scaleX));
+        selCanvas.height = Math.max(1, Math.round(r.h * scaleY));
+        selCanvas.style.width = r.w + 'px';
+        selCanvas.style.height = r.h + 'px';
+        const sctx = selCanvas.getContext('2d');
+        sctx.drawImage(srcCanvas,
+            r.x * scaleX, r.y * scaleY,
+            r.w * scaleX, r.h * scaleY,
+            0, 0, selCanvas.width, selCanvas.height);
+        sizeLabel.textContent = `${Math.round(r.w)} × ${Math.round(r.h)}`;
+    };
+
+    const positionToolbar = () => {
+        const r = getRect();
+        toolbar.style.display = 'block';
+        const tw = toolbar.offsetWidth, th = toolbar.offsetHeight;
+        let tx = r.x + r.w - tw;
+        let ty = r.y + r.h + 8;
+        if (ty + th > displayHeight - 4) ty = r.y - th - 8;
+        if (ty < 4) ty = Math.max(4, r.y + 4);
+        if (tx < 4) tx = 4;
+        if (tx + tw > displayWidth - 4) tx = displayWidth - tw - 4;
+        toolbar.style.left = tx + 'px';
+        toolbar.style.top = ty + 'px';
+
+        const viewLeft = viewport.scrollLeft;
+        const viewTop = viewport.scrollTop;
+        const viewRight = viewLeft + viewport.clientWidth;
+        const viewBottom = viewTop + viewport.clientHeight;
+        const pad = 24;
+
+        if (tx < viewLeft + pad) {
+            viewport.scrollLeft = Math.max(0, tx - pad);
+        } else if (tx + tw > viewRight - pad) {
+            viewport.scrollLeft = Math.min(displayWidth - viewport.clientWidth, tx + tw - viewport.clientWidth + pad);
+        }
+        if (ty < viewTop + pad) {
+            viewport.scrollTop = Math.max(0, ty - pad);
+        } else if (ty + th > viewBottom - pad) {
+            viewport.scrollTop = Math.min(displayHeight - viewport.clientHeight, ty + th - viewport.clientHeight + pad);
+        }
+    };
+
+    const close = () => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKey);
+        if (typeof onClose === 'function') onClose();
+    };
+
+    const finalize = (action) => {
+        const r = getRect();
+        if (r.w < 2 || r.h < 2) return;
+        const out = document.createElement('canvas');
+        out.width = Math.max(1, Math.round(r.w * scaleX));
+        out.height = Math.max(1, Math.round(r.h * scaleY));
+        out.getContext('2d').drawImage(srcCanvas,
+            r.x * scaleX, r.y * scaleY,
+            r.w * scaleX, r.h * scaleY,
+            0, 0, out.width, out.height);
+        if (action === 'save') {
+            out.toBlob((blob) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `screenshot_${Date.now()}.png`;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
+                close();
+            }, 'image/png');
+        } else if (action === 'copy') {
+            out.toBlob(async (blob) => {
+                try {
+                    if (navigator.clipboard && window.ClipboardItem) {
+                        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+                        showToast && showToast('已复制到剪贴板');
+                        close();
+                    } else { throw new Error('剪贴板不可用'); }
+                } catch (e) {
+                    console.warn('复制失败，降级为下载', e);
+                    alert('当前环境不支持复制图片到剪贴板（需 HTTPS 或较新浏览器），将改为下载。');
+                    finalize('save');
+                }
+            }, 'image/png');
+        }
+    };
+
+    const autoScrollWhileDragging = (evt) => {
+        const edge = 36;
+        const step = 24;
+        if (evt.clientY > vh - edge) {
+            viewport.scrollTop = Math.min(displayHeight - viewport.clientHeight, viewport.scrollTop + step);
+        } else if (evt.clientY < edge) {
+            viewport.scrollTop = Math.max(0, viewport.scrollTop - step);
+        }
+
+        if (evt.clientX > vw - edge) {
+            viewport.scrollLeft = Math.min(displayWidth - viewport.clientWidth, viewport.scrollLeft + step);
+        } else if (evt.clientX < edge) {
+            viewport.scrollLeft = Math.max(0, viewport.scrollLeft - step);
+        }
+    };
+
+    viewport.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        if (!stage.contains(e.target)) return;
+        if (hasSelection) return;
+        dragging = true;
+        const p = toStagePos(e);
+        startX = p.x; startY = p.y; curX = p.x; curY = p.y;
+        toolbar.style.display = 'none';
+        e.preventDefault();
+    });
+    viewport.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        autoScrollWhileDragging(e);
+        const p = toStagePos(e);
+        curX = p.x;
+        curY = p.y;
+        renderSelection();
+    });
+    viewport.addEventListener('mouseup', (e) => {
+        if (!dragging) return;
+        dragging = false;
+        const r = getRect();
+        if (r.w >= 2 && r.h >= 2) {
+            hasSelection = true;
+            overlay.style.cursor = 'default';
+            positionToolbar();
+        } else {
+            sel.style.display = 'none';
+        }
+    });
+
+    btnCancel.addEventListener('click', close);
+    btnSave.addEventListener('click', () => finalize('save'));
+    btnCopy.addEventListener('click', () => finalize('copy'));
+
+    const onKey = (e) => {
+        if (e.key === 'Escape') close();
+        else if (e.key === 'Enter' && hasSelection) finalize('save');
+    };
+    document.addEventListener('keydown', onKey);
 }
 
 // 导出方案

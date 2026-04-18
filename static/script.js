@@ -2,7 +2,7 @@
 
 
 
-const API_BASE = 'http://127.0.0.1:5000/api/';
+const API_BASE = '/api/';
 
 
 
@@ -307,6 +307,30 @@ let savedPredictionData = null;
 let currentPOIData = null;
 
 let currentPoiSource = 'mock';
+
+// 电单车模拟全局状态
+let ebikeSimMarkers = [];
+let ebikeSimData = [];
+let ebikeAnimationTimer = null;
+let ebikeAnimationRunning = false;
+let ebikeRoadReady = false;
+let ebikeRoadLoadingPromise = null;
+let batteryRouteLines = [];
+
+// 坐标系判断边界：前端底图使用 BD09，后端数据可能混入 WGS84，需要归一化
+const EBIKE_BD09_BOUNDS = {
+    minLng: 114.3590,
+    maxLng: 114.3725,
+    minLat: 30.5290,
+    maxLat: 30.5410
+};
+
+const EBIKE_WGS84_BOUNDS = {
+    minLng: 114.3460,
+    maxLng: 114.3605,
+    minLat: 30.5250,
+    maxLat: 30.5375
+};
 
 
 
@@ -8416,34 +8440,798 @@ function renderComparisonAnalysisPanel() {
     return true;
 }
 
+function isCoordInBounds(lng, lat, bounds) {
+    return lng >= bounds.minLng && lng <= bounds.maxLng && lat >= bounds.minLat && lat <= bounds.maxLat;
+}
+
+function normalizeBikeToBd09(rawLng, rawLat) {
+    let lng = Number(rawLng);
+    let lat = Number(rawLat);
+
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+        return null;
+    }
+
+    // 坐标疑似写反时自动纠正
+    if (lat > 90 || lat < -90) {
+        const tmp = lng;
+        lng = lat;
+        lat = tmp;
+    }
+
+    if (isCoordInBounds(lng, lat, EBIKE_BD09_BOUNDS)) {
+        return { lng, lat };
+    }
+
+    // 若落在 WGS84 典型范围，转成 BD09 再绘制
+    if (isCoordInBounds(lng, lat, EBIKE_WGS84_BOUNDS)) {
+        const converted = wgs84ToBd09(lng, lat);
+        if (Number.isFinite(converted?.lng) && Number.isFinite(converted?.lat)) {
+            return { lng: converted.lng, lat: converted.lat };
+        }
+    }
+
+    return { lng, lat };
+}
+
+function syncSimulationButtons() {
+    const playPauseBtn = document.getElementById('play-pause-btn');
+    const startBtn = document.getElementById('start-simulation');
+    const stopBtn = document.getElementById('stop-simulation');
+
+    if (playPauseBtn) {
+        playPauseBtn.textContent = ebikeAnimationRunning ? '暂停动画' : '播放动画';
+    }
+    if (startBtn) {
+        startBtn.disabled = ebikeAnimationRunning;
+    }
+    if (stopBtn) {
+        stopBtn.disabled = !ebikeAnimationRunning;
+    }
+}
+
+function bindSimulationModuleButtons() {
+    const startBtn = document.getElementById('start-simulation');
+    const stopBtn = document.getElementById('stop-simulation');
+
+    if (startBtn && !startBtn.dataset.bound) {
+        startBtn.dataset.bound = '1';
+        startBtn.addEventListener('click', function() {
+            const levelSelect = document.getElementById('simulation-level');
+            const timeSelect = document.getElementById('simulation-time');
+            const level = levelSelect ? levelSelect.value : 'medium';
+            const timeSlot = timeSelect ? timeSelect.value : 'morning';
+
+            const mainLevel = document.getElementById('sim-data-level');
+            const mainTime = document.getElementById('sim-time-slot');
+            if (mainLevel) mainLevel.value = level;
+            if (mainTime) mainTime.value = timeSlot;
+
+            generateEbikeSimulation();
+        });
+    }
+
+    if (stopBtn && !stopBtn.dataset.bound) {
+        stopBtn.dataset.bound = '1';
+        stopBtn.addEventListener('click', function() {
+            stopEbikeAnimation();
+            showToast('动画已停止');
+        });
+    }
+
+    syncSimulationButtons();
+}
+
+function clearBatteryRouteLines() {
+    batteryRouteLines.forEach(line => {
+        try {
+            map.removeOverlay(line);
+        } catch (_) {
+            // ignore
+        }
+    });
+    batteryRouteLines = [];
+}
+
+function buildRoadNetworkFromGeoJSON(geojson) {
+    const newNetwork = { nodes: {}, edges: [] };
+
+    if (geojson && Array.isArray(geojson.features)) {
+        geojson.features.forEach(feature => {
+            if (!feature || !feature.geometry) {
+                return;
+            }
+
+            let lines = [];
+            if (feature.geometry.type === 'MultiLineString') {
+                lines = feature.geometry.coordinates || [];
+            } else if (feature.geometry.type === 'LineString') {
+                lines = [feature.geometry.coordinates || []];
+            }
+
+            lines.forEach(line => {
+                if (!Array.isArray(line) || line.length < 2) {
+                    return;
+                }
+
+                for (let i = 0; i < line.length - 1; i++) {
+                    const p1 = normalizeBikeToBd09(line[i][0], line[i][1]);
+                    const p2 = normalizeBikeToBd09(line[i + 1][0], line[i + 1][1]);
+                    if (!p1 || !p2) {
+                        continue;
+                    }
+
+                    const node1Key = `${p1.lat.toFixed(6)},${p1.lng.toFixed(6)}`;
+                    const node2Key = `${p2.lat.toFixed(6)},${p2.lng.toFixed(6)}`;
+
+                    if (!newNetwork.nodes[node1Key]) {
+                        newNetwork.nodes[node1Key] = {
+                            id: node1Key,
+                            lat: p1.lat,
+                            lng: p1.lng,
+                            neighbors: []
+                        };
+                    }
+
+                    if (!newNetwork.nodes[node2Key]) {
+                        newNetwork.nodes[node2Key] = {
+                            id: node2Key,
+                            lat: p2.lat,
+                            lng: p2.lng,
+                            neighbors: []
+                        };
+                    }
+
+                    const distance = calcDistanceMeters(p1.lat, p1.lng, p2.lat, p2.lng);
+                    newNetwork.edges.push({
+                        from: node1Key,
+                        to: node2Key,
+                        distance
+                    });
+
+                    newNetwork.nodes[node1Key].neighbors.push({ node: node2Key, distance });
+                    newNetwork.nodes[node2Key].neighbors.push({ node: node1Key, distance });
+                }
+            });
+        });
+    }
+
+    if (Object.keys(newNetwork.nodes).length > 0) {
+        realRoadNetwork.nodes = newNetwork.nodes;
+        realRoadNetwork.edges = newNetwork.edges;
+        ebikeRoadReady = true;
+        return true;
+    }
+
+    return false;
+}
+
+function initMockRoadNetwork() {
+    const ok = buildRoadNetworkFromGeoJSON(mockRoadNetwork);
+    if (ok) {
+        console.info('已加载内置模拟路网，节点数:', Object.keys(realRoadNetwork.nodes).length);
+    }
+    return ok;
+}
+
+function loadRealRoadNetwork() {
+    return fetch(API_BASE + 'roads', { cache: 'no-store' })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(geojson => {
+            const ok = buildRoadNetworkFromGeoJSON(geojson);
+            if (!ok) {
+                throw new Error('真实路网为空，回退模拟路网');
+            }
+            console.info('真实路网数据加载完成，节点数:', Object.keys(realRoadNetwork.nodes).length);
+            return true;
+        })
+        .catch(error => {
+            console.warn('加载真实路网数据失败，回退到模拟路网:', error);
+            initMockRoadNetwork();
+            return false;
+        });
+}
+
+function ensureEbikeRoadNetwork() {
+    if (ebikeRoadReady && Object.keys(realRoadNetwork.nodes).length > 0) {
+        return Promise.resolve(true);
+    }
+
+    if (ebikeRoadLoadingPromise) {
+        return ebikeRoadLoadingPromise;
+    }
+
+    ebikeRoadLoadingPromise = loadRealRoadNetwork().finally(() => {
+        ebikeRoadLoadingPromise = null;
+    });
+
+    return ebikeRoadLoadingPromise;
+}
+
+function findNearestRoadNode(lat, lng) {
+    let nearestNode = null;
+    let minDistance = Infinity;
+
+    Object.entries(realRoadNetwork.nodes).forEach(([nodeId, node]) => {
+        const distance = calcDistanceMeters(lat, lng, node.lat, node.lng);
+        if (distance < minDistance) {
+            minDistance = distance;
+            nearestNode = nodeId;
+        }
+    });
+
+    if (!nearestNode) {
+        const nodeIds = Object.keys(realRoadNetwork.nodes);
+        nearestNode = nodeIds.length > 0 ? nodeIds[0] : null;
+    }
+
+    return nearestNode;
+}
+
+function getRandomRoadNode() {
+    const nodeIds = Object.keys(realRoadNetwork.nodes);
+    if (nodeIds.length === 0) {
+        return null;
+    }
+
+    const randomIndex = Math.floor(Math.random() * nodeIds.length);
+    const nodeId = nodeIds[randomIndex];
+    return realRoadNetwork.nodes[nodeId];
+}
+
+function findPathBFS(startNode, endNode) {
+    if (!startNode || !endNode || !realRoadNetwork.nodes[startNode] || !realRoadNetwork.nodes[endNode]) {
+        return [];
+    }
+
+    const queue = [[startNode]];
+    const visited = new Set();
+
+    while (queue.length > 0) {
+        const path = queue.shift();
+        const current = path[path.length - 1];
+
+        if (current === endNode) {
+            return path;
+        }
+
+        if (visited.has(current)) {
+            continue;
+        }
+        visited.add(current);
+
+        const neighbors = realRoadNetwork.nodes[current].neighbors || [];
+        neighbors.forEach(neighbor => {
+            if (!visited.has(neighbor.node)) {
+                queue.push([...path, neighbor.node]);
+            }
+        });
+    }
+
+    return [];
+}
+
+function findPathOnRoads(startLat, startLng, endLat, endLng) {
+    const startNode = findNearestRoadNode(startLat, startLng);
+    const endNode = findNearestRoadNode(endLat, endLng);
+
+    if (!startNode || !endNode) {
+        return null;
+    }
+
+    const path = findPathBFS(startNode, endNode);
+    if (!path || path.length === 0) {
+        return null;
+    }
+
+    return path
+        .map(nodeId => {
+            const node = realRoadNetwork.nodes[nodeId];
+            if (!node) return null;
+            return [node.lng, node.lat];
+        })
+        .filter(Boolean);
+}
+
+function buildEbikeInfoHtml(ebike) {
+    return `
+        <div class="popup-content">
+            <div class="popup-title">电单车 ${ebike.id}</div>
+            <div class="popup-row"><span class="popup-label">状态</span><span class="popup-value">${ebike.status === 'idle' ? '空闲' : '移动'}</span></div>
+            <div class="popup-row"><span class="popup-label">电量</span><span class="popup-value">${Math.max(0, Math.round(ebike.battery))}%</span></div>
+            <div class="popup-row"><span class="popup-label">速度</span><span class="popup-value">${Math.round(ebike.speed || 0)} km/h</span></div>
+        </div>
+    `;
+}
+
 // 生成电单车模拟
 function generateEbikeSimulation() {
-    alert('电单车模拟功能开发中');
+    if (!map) {
+        showToast('地图尚未初始化，请先登录系统');
+        return;
+    }
+
+    const timeSlot = document.getElementById('sim-time-slot')?.value
+        || document.getElementById('simulation-time')?.value
+        || 'morning';
+    const dataLevel = document.getElementById('sim-data-level')?.value
+        || document.getElementById('simulation-level')?.value
+        || 'medium';
+
+    showProgress('正在生成电单车模拟数据...');
+
+    ensureEbikeRoadNetwork()
+        .then(() => fetch(`${API_BASE}bike-simulation?time=${timeSlot}&level=${dataLevel}`, { cache: 'no-store' }))
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('HTTP ' + response.status);
+            }
+            return response.json();
+        })
+        .then(data => {
+            const bikes = Array.isArray(data?.bikes) ? data.bikes : [];
+            const ebikeData = bikes
+                .map((bike, idx) => {
+                    const normalized = normalizeBikeToBd09(bike.lng, bike.lat);
+                    if (!normalized) return null;
+                    return {
+                        id: 'ebike_' + (bike.id || (idx + 1)),
+                        lat: normalized.lat,
+                        lng: normalized.lng,
+                        status: bike.status || (Math.random() > 0.3 ? 'idle' : 'moving'),
+                        speed: Number(bike.speed) || (bike.status === 'moving' ? 15 : 0),
+                        battery: Number(bike.battery) || 100,
+                        time_slot: timeSlot,
+                        path: null,
+                        pathIndex: 0,
+                        progress: 0
+                    };
+                })
+                .filter(Boolean);
+
+            renderEbikeSimulation(ebikeData, timeSlot, dataLevel, Number(data?.count) || ebikeData.length);
+            hideProgress();
+            showToast(`电单车模拟数据生成完成，共 ${ebikeData.length} 辆`);
+
+            setTimeout(() => {
+                toggleEbikeAnimation();
+            }, 300);
+        })
+        .catch(error => {
+            console.error('读取电单车模拟数据失败:', error);
+            const counts = { low: 50, medium: 100, high: 150 };
+            const count = counts[dataLevel] || 100;
+            const ebikeData = generateMockEbikeData(count, timeSlot);
+            renderEbikeSimulation(ebikeData, timeSlot, dataLevel, count);
+            hideProgress();
+            showToast(`已使用本地模拟数据，共 ${count} 辆`);
+            setTimeout(() => {
+                toggleEbikeAnimation();
+            }, 300);
+        });
+}
+
+function generateMockEbikeData(count, timeSlot) {
+    const data = [];
+    const heatZones = MOCK_HEATMAP_DATA[timeSlot] || MOCK_HEATMAP_DATA.morning || [];
+
+    for (let i = 0; i < count; i++) {
+        const zone = heatZones.length ? heatZones[Math.floor(Math.random() * heatZones.length)] : [30.533, 114.365, 60];
+        const latRaw = zone[0] + (Math.random() - 0.5) * 0.001;
+        const lngRaw = zone[1] + (Math.random() - 0.5) * 0.001;
+        const normalized = normalizeBikeToBd09(lngRaw, latRaw);
+        if (!normalized) continue;
+
+        const moving = Math.random() > 0.35;
+        data.push({
+            id: 'ebike_' + (i + 1),
+            lat: normalized.lat,
+            lng: normalized.lng,
+            status: moving ? 'moving' : 'idle',
+            battery: Math.floor(35 + Math.random() * 65),
+            speed: moving ? Math.floor(12 + Math.random() * 14) : 0,
+            path: null,
+            pathIndex: 0,
+            progress: 0
+        });
+    }
+
+    return data;
+}
+
+function renderEbikeSimulation(ebikeData, timeSlot, dataLevel, count) {
+    clearEbikeSimulation(true);
+
+    ebikeData.forEach((ebike, idx) => {
+        const color = ebike.status === 'idle' ? '#1a73e8' : '#34a853';
+        const point = new BMap.Point(ebike.lng, ebike.lat);
+        let marker = null;
+
+        try {
+            const symbol = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+                scale: 4,
+                fillColor: color,
+                fillOpacity: 0.9,
+                strokeColor: '#ffffff',
+                strokeWeight: 1.5
+            });
+            marker = new BMap.Marker(point, { icon: symbol });
+        } catch (_) {
+            marker = new BMap.Marker(point);
+        }
+
+        marker.setTitle('电单车 ' + ebike.id);
+        marker.addEventListener('click', function() {
+            const infoWindow = new BMap.InfoWindow(buildEbikeInfoHtml(ebike), {
+                width: 220,
+                enableMessage: false
+            });
+            marker.openInfoWindow(infoWindow);
+        });
+
+        map.addOverlay(marker);
+        ebikeSimMarkers.push({ marker, id: ebike.id });
+        ebikeSimData.push(ebike);
+
+        if (ebike.status === 'moving') {
+            const targetNode = getRandomRoadNode();
+            if (targetNode) {
+                const pathCoords = findPathOnRoads(ebike.lat, ebike.lng, targetNode.lat, targetNode.lng);
+                if (pathCoords && pathCoords.length > 1) {
+                    ebike.path = pathCoords.map(coord => ({ lat: coord[1], lng: coord[0] }));
+                    ebike.pathIndex = 0;
+                    ebike.progress = 0;
+                }
+            }
+        }
+    });
+
+    const simStatsCard = document.getElementById('ebike-sim-stats-card');
+    if (simStatsCard) {
+        simStatsCard.style.display = 'block';
+    }
+
+    const countEl = document.getElementById('sim-ebike-count');
+    const timeEl = document.getElementById('sim-time-display');
+    const levelEl = document.getElementById('sim-level-display');
+    const statusEl = document.getElementById('sim-anim-status');
+
+    if (countEl) countEl.textContent = (count || ebikeData.length) + ' 辆';
+    if (timeEl) {
+        timeEl.textContent = {
+            morning: '早高峰 (7:00-9:00)',
+            noon: '午高峰 (11:00-13:00)',
+            evening: '晚高峰 (17:00-19:00)'
+        }[timeSlot] || timeSlot;
+    }
+    if (levelEl) {
+        levelEl.textContent = {
+            low: '低 (50辆)',
+            medium: '中 (100辆)',
+            high: '高 (150辆)'
+        }[dataLevel] || dataLevel;
+    }
+    if (statusEl) statusEl.textContent = '未播放';
+
+    syncSimulationButtons();
 }
 
 // 切换电单车动画
 function toggleEbikeAnimation() {
-    alert('动画控制功能开发中');
+    if (ebikeSimData.length === 0) {
+        showToast('请先生成电单车模拟数据');
+        return;
+    }
+
+    if (ebikeAnimationRunning) {
+        stopEbikeAnimation();
+        showToast('动画已暂停');
+    } else {
+        startEbikeAnimation();
+        showToast('电单车动画已开始');
+    }
+}
+
+function startEbikeAnimation() {
+    if (ebikeAnimationRunning || ebikeSimData.length === 0) {
+        syncSimulationButtons();
+        return;
+    }
+
+    ebikeAnimationRunning = true;
+    const statusEl = document.getElementById('sim-anim-status');
+    if (statusEl) statusEl.textContent = '播放中';
+
+    // 开播前按参考逻辑为移动车辆生成基于路网的路径
+    ebikeSimData.forEach(ebike => {
+        if (ebike.status === undefined) {
+            ebike.status = Math.random() > 0.3 ? 'idle' : 'moving';
+        }
+
+        if (ebike.status === 'moving') {
+            ebike.speed = Math.max(15, Number(ebike.speed) || 30);
+            const startNode = findNearestRoadNode(ebike.lat, ebike.lng);
+            if (startNode) {
+                let pathCoords = null;
+                let attempts = 0;
+                const maxAttempts = 5;
+
+                while (!pathCoords && attempts < maxAttempts) {
+                    const targetNode = getRandomRoadNode();
+                    if (targetNode) {
+                        pathCoords = findPathOnRoads(ebike.lat, ebike.lng, targetNode.lat, targetNode.lng);
+                    }
+                    attempts++;
+                }
+
+                if (pathCoords && pathCoords.length > 1) {
+                    ebike.path = pathCoords.map(coord => ({ lat: coord[1], lng: coord[0] }));
+                    ebike.pathIndex = 0;
+                    ebike.progress = 0;
+                } else {
+                    ebike.status = 'idle';
+                    ebike.speed = 0;
+                }
+            } else {
+                ebike.status = 'idle';
+                ebike.speed = 0;
+            }
+        }
+    });
+
+    ebikeAnimationTimer = setInterval(() => {
+        ebikeSimData.forEach((ebike, idx) => {
+            if (ebike.status === undefined) {
+                ebike.status = 'idle';
+            }
+            if (ebike.speed === undefined) {
+                ebike.speed = 30;
+            }
+            if (ebike.pathIndex === undefined) {
+                ebike.pathIndex = 0;
+            }
+            if (ebike.progress === undefined) {
+                ebike.progress = 0;
+            }
+
+            if (ebike.status === 'moving' && ebike.path && ebike.path.length > 1) {
+                const path = ebike.path;
+
+                if (ebike.pathIndex < path.length - 1) {
+                    const currentPoint = path[ebike.pathIndex];
+                    const nextPoint = path[ebike.pathIndex + 1];
+
+                    const distance = calcDistanceMeters(
+                        currentPoint.lat,
+                        currentPoint.lng,
+                        nextPoint.lat,
+                        nextPoint.lng
+                    );
+
+                    const speed = (Number(ebike.speed) || 30) / 3600 * 1000;
+                    const timeStep = 0.05;
+                    const moveDistance = speed * timeStep;
+
+                    ebike.progress += moveDistance;
+
+                    if (ebike.progress >= distance) {
+                        ebike.lat = nextPoint.lat;
+                        ebike.lng = nextPoint.lng;
+                        ebike.pathIndex++;
+                        ebike.progress = 0;
+
+                        if (ebike.pathIndex >= path.length - 1) {
+                            const newTargetNode = getRandomRoadNode();
+                            if (newTargetNode) {
+                                const newPathCoords = findPathOnRoads(ebike.lat, ebike.lng, newTargetNode.lat, newTargetNode.lng);
+                                if (newPathCoords && newPathCoords.length > 1) {
+                                    ebike.path = newPathCoords.map(coord => ({ lat: coord[1], lng: coord[0] }));
+                                    ebike.pathIndex = 0;
+                                } else {
+                                    ebike.status = 'idle';
+                                    ebike.speed = 0;
+                                }
+                            } else {
+                                ebike.status = 'idle';
+                                ebike.speed = 0;
+                            }
+                        }
+                    } else if (distance > 0) {
+                        const ratio = ebike.progress / distance;
+                        ebike.lat = currentPoint.lat + (nextPoint.lat - currentPoint.lat) * ratio;
+                        ebike.lng = currentPoint.lng + (nextPoint.lng - currentPoint.lng) * ratio;
+                    }
+
+                    ebike.battery = Math.max(0, (Number(ebike.battery) || 0) - 0.01);
+                }
+            }
+
+            const markerWrap = ebikeSimMarkers[idx];
+            if (markerWrap && markerWrap.marker) {
+                markerWrap.marker.setPosition(new BMap.Point(ebike.lng, ebike.lat));
+            }
+        });
+    }, 50);
+
+    syncSimulationButtons();
+}
+
+function playEbikeAnimation() {
+    toggleEbikeAnimation();
+}
+
+function stopEbikeAnimation() {
+    if (ebikeAnimationTimer) {
+        clearInterval(ebikeAnimationTimer);
+        ebikeAnimationTimer = null;
+    }
+    ebikeAnimationRunning = false;
+    const statusEl = document.getElementById('sim-anim-status');
+    if (statusEl) statusEl.textContent = '已停止';
+    syncSimulationButtons();
 }
 
 // 清除电单车模拟
-function clearEbikeSimulation() {
-    alert('清除模拟功能开发中');
+function clearEbikeSimulation(silent) {
+    stopEbikeAnimation();
+
+    ebikeSimMarkers.forEach(item => {
+        const marker = item?.marker || item;
+        if (marker) {
+            try {
+                map.removeOverlay(marker);
+            } catch (_) {
+                // ignore
+            }
+        }
+    });
+
+    ebikeSimMarkers = [];
+    ebikeSimData = [];
+    clearBatteryRouteLines();
+
+    const simStatsCard = document.getElementById('ebike-sim-stats-card');
+    if (simStatsCard) {
+        simStatsCard.style.display = 'none';
+    }
+
+    const countEl = document.getElementById('sim-ebike-count');
+    const timeEl = document.getElementById('sim-time-display');
+    const levelEl = document.getElementById('sim-level-display');
+    const statusEl = document.getElementById('sim-anim-status');
+
+    if (countEl) countEl.textContent = '0 辆';
+    if (timeEl) timeEl.textContent = '-';
+    if (levelEl) levelEl.textContent = '-';
+    if (statusEl) statusEl.textContent = '未播放';
+
+    syncSimulationButtons();
+
+    if (!silent) {
+        showToast('电单车模拟已清除');
+    }
 }
 
 // 筛选低电量车辆
 function filterLowBattery() {
-    alert('低电量筛选功能开发中');
+    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const tbody = document.getElementById('battery-table-body');
+
+    if (!tbody) {
+        showToast('未找到低电量列表面板');
+        return;
+    }
+
+    if (ebikeSimData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">请先生成电单车模拟数据</td></tr>';
+        showToast('请先生成电单车模拟数据');
+        return;
+    }
+
+    const lowBattery = ebikeSimData
+        .filter(bike => Number(bike.battery) <= threshold)
+        .sort((a, b) => Number(a.battery) - Number(b.battery));
+
+    if (lowBattery.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">当前无低电量车辆</td></tr>';
+        showToast('当前无低电量车辆');
+        return;
+    }
+
+    tbody.innerHTML = lowBattery.map(bike => {
+        const levelColor = bike.battery <= 15 ? '#e53935' : '#fb8c00';
+        return `<tr>
+            <td>${bike.id}</td>
+            <td>${bike.lng.toFixed(5)}, ${bike.lat.toFixed(5)}</td>
+            <td style="color:${levelColor};font-weight:600;">${Math.round(bike.battery)}%</td>
+            <td>${bike.time_slot || '-'}</td>
+        </tr>`;
+    }).join('');
+
+    showToast(`已筛选出 ${lowBattery.length} 辆低电量车辆`);
 }
 
 // 生成换电路线
 function generateBatteryRoute() {
-    alert('换电路线生成功能开发中');
+    if (!map) {
+        showToast('地图尚未初始化');
+        return;
+    }
+
+    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const lowBattery = ebikeSimData.filter(bike => Number(bike.battery) <= threshold);
+
+    if (lowBattery.length === 0) {
+        showToast('无低电量车辆可生成路线');
+        return;
+    }
+
+    clearBatteryRouteLines();
+
+    const servicePoints = [];
+    if (smartMarkers.length > 0) {
+        smartMarkers.forEach(item => {
+            if (Number.isFinite(item?.lng) && Number.isFinite(item?.lat)) {
+                servicePoints.push({ lng: item.lng, lat: item.lat });
+            }
+        });
+    }
+    if (manualMarkers.length > 0) {
+        manualMarkers.forEach(item => {
+            if (Number.isFinite(item?.lng) && Number.isFinite(item?.lat)) {
+                servicePoints.push({ lng: item.lng, lat: item.lat });
+            }
+        });
+    }
+    if (servicePoints.length === 0) {
+        servicePoints.push({ lng: CAMPUS_CENTER_BD09[0], lat: CAMPUS_CENTER_BD09[1] });
+    }
+
+    lowBattery.forEach(bike => {
+        let target = servicePoints[0];
+        let minDist = calcDistanceMeters(bike.lat, bike.lng, target.lat, target.lng);
+
+        for (let i = 1; i < servicePoints.length; i++) {
+            const point = servicePoints[i];
+            const dist = calcDistanceMeters(bike.lat, bike.lng, point.lat, point.lng);
+            if (dist < minDist) {
+                minDist = dist;
+                target = point;
+            }
+        }
+
+        const line = new BMap.Polyline([
+            new BMap.Point(bike.lng, bike.lat),
+            new BMap.Point(target.lng, target.lat)
+        ], {
+            strokeColor: '#ff9800',
+            strokeWeight: 2,
+            strokeOpacity: 0.85,
+            strokeStyle: 'dashed'
+        });
+
+        map.addOverlay(line);
+        batteryRouteLines.push(line);
+    });
+
+    showToast(`已为 ${lowBattery.length} 辆低电量车辆生成换电路线`);
 }
 
 // 清除模拟
 function clearSimulation() {
-    alert('清除模拟功能开发中');
+    clearEbikeSimulation(true);
+
+    const tbody = document.getElementById('battery-table-body');
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
+    }
+
+    showToast('模拟数据已清除');
 }
 
 // 页面加载完成后初始化
@@ -8473,6 +9261,12 @@ window.onload = function() {
 
 
         initLayerControl();
+
+
+        // 绑定电单车模拟模块按钮
+
+
+        bindSimulationModuleButtons();
 
 
 

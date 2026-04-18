@@ -308,6 +308,8 @@ let currentPOIData = null;
 
 let currentPoiSource = 'mock';
 
+let currentUserRole = 'admin';
+
 // 电单车模拟全局状态
 let ebikeSimMarkers = [];
 let ebikeSimData = [];
@@ -316,6 +318,17 @@ let ebikeAnimationRunning = false;
 let ebikeRoadReady = false;
 let ebikeRoadLoadingPromise = null;
 let batteryRouteLines = [];
+let lowBatteryMarkers = [];
+let currentLowBatteryList = [];
+let batteryRouteAssignments = {};
+let batteryLastRouteResult = null;
+
+const BATTERY_ROUTE_COLORS = ['#28a745', '#1a73e8', '#fb8c00', '#8e24aa', '#00acc1', '#d81b60'];
+const BATTERY_DEFAULT_CAPACITY = 6;
+const BATTERY_STATE_STORAGE_KEY = 'battery_ops_state_v1';
+const BATTERY_ARROW_ROTATION_OFFSET = 90;
+
+let dispatcherSelectedVehicleKey = '';
 
 // 坐标系判断边界：前端底图使用 BD09，后端数据可能混入 WGS84，需要归一化
 const EBIKE_BD09_BOUNDS = {
@@ -6947,9 +6960,16 @@ function handleLogin() {
 
         document.getElementById('systemPage').style.display = 'flex';
 
+        currentUserRole = role;
 
 
-        document.getElementById('currentUser').textContent = role === 'admin' ? '管理员' : '调度常';
+
+        document.getElementById('currentUser').textContent = role === 'admin' ? '管理员' : '调度员';
+
+        // 每次新登录都清空上一次电池运维遗留状态，避免页面残留
+        resetBatteryOpsStateForNewLogin();
+
+        applyRolePermissions();
 
 
 
@@ -7496,6 +7516,10 @@ function initMenuSwitch() {
 
         item.addEventListener('click', function() {
 
+            if (this.dataset.hiddenForRole === '1') {
+                return;
+            }
+
 
 
             // 移除所有菜单项的active类
@@ -7544,6 +7568,11 @@ function initMenuSwitch() {
 
                 currentModule.style.display = 'block';
 
+                updateBatteryOperationButtons();
+                if (moduleId === 'battery-module') {
+                    hydrateBatteryOpsView();
+                }
+
 
 
             }
@@ -7558,6 +7587,23 @@ function initMenuSwitch() {
 
 
 
+}
+
+function applyRolePermissions() {
+    const batteryMenu = document.getElementById('battery-menu-item');
+    const roleTip = document.getElementById('battery-role-tip');
+    const isAdmin = currentUserRole === 'admin';
+
+    if (batteryMenu) {
+        batteryMenu.style.display = '';
+        batteryMenu.dataset.hiddenForRole = '0';
+    }
+
+    if (roleTip) {
+        roleTip.style.display = isAdmin ? 'none' : 'block';
+    }
+
+    updateBatteryOperationButtons();
 }
 
 
@@ -8432,6 +8478,7 @@ async function captureViewportViaDisplayMedia() {
         systemAudio: 'exclude'
     });
 
+    let canvas = null;
     try {
         const video = document.createElement('video');
         video.muted = true;
@@ -8442,37 +8489,27 @@ async function captureViewportViaDisplayMedia() {
             video.onerror = () => reject(new Error('视频帧加载失败'));
         });
         await video.play();
-        // 留一帧让视频真正解码到可用画面
-        await new Promise(r => setTimeout(r, 120));
+        await new Promise(r => setTimeout(r, 150));
 
         const sw = video.videoWidth;
         const sh = video.videoHeight;
         if (!sw || !sh) throw new Error('未获取到捕获帧');
 
-        const viewport = getViewportSize();
-        const vw = viewport.width;
-        const vh = viewport.height;
-
-        // 捕获源可能是整个窗口/屏幕；按视口宽高比裁剪出当前可视区
-        const targetRatio = vw / vh;
-        const srcRatio = sw / sh;
-        let sx = 0, sy = 0, cw = sw, ch = sh;
-        if (srcRatio > targetRatio) {
-            cw = Math.round(sh * targetRatio);
-            sx = Math.round((sw - cw) / 2);
-        } else if (srcRatio < targetRatio) {
-            ch = Math.round(sw / targetRatio);
-            sy = Math.round((sh - ch) / 2);
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = cw;
-        canvas.height = ch;
-        canvas.getContext('2d').drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
-        return canvas;
+        // 不做宽高比裁剪——把完整捕获帧交给叠加层按视口尺寸做拉伸显示。
+        // 原先的中心裁剪在浏览器"正在共享"栏出现/收回导致视口瞬时变化时，
+        // 会让目标尺寸偏离实际视口，叠加层渲染后底部留出一条空隙。
+        canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        canvas.getContext('2d').drawImage(video, 0, 0, sw, sh, 0, 0, sw, sh);
     } finally {
         stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
     }
+
+    // 等 Chrome 的"正在共享"栏收回、视口尺寸稳定，再返回
+    await new Promise(r => setTimeout(r, 120));
+    await waitForNextPaint();
+    return canvas;
 }
 
 async function capturePageViaHtml2Canvas() {
@@ -8569,10 +8606,12 @@ async function startCustomScreenshot() {
         try {
             tip.remove();
             const canvas = await captureViewportViaDisplayMedia();
+            // 捕获后（"正在共享"栏收回）重新量测视口，保证叠加层尺寸与实际视口一致
+            const vpAfter = getViewportSize();
             captureResult = {
                 canvas,
-                displayWidth: viewport.width,
-                displayHeight: viewport.height
+                displayWidth: vpAfter.width,
+                displayHeight: vpAfter.height
             };
         } catch (err) {
             lastErr = err;
@@ -8619,8 +8658,8 @@ function openScreenshotOverlay(captureResult, onClose) {
     const viewportSize = getViewportSize();
     const vw = viewportSize.width;
     const vh = viewportSize.height;
-    const displayWidth = Math.max(vw, Number(captureResult.displayWidth) || vw);
-    const displayHeight = Math.max(vh, Number(captureResult.displayHeight) || vh);
+    const displayWidth = Number(captureResult.displayWidth) || vw;
+    const displayHeight = Number(captureResult.displayHeight) || vh;
     const scaleX = srcCanvas.width / displayWidth;
     const scaleY = srcCanvas.height / displayHeight;
 
@@ -9047,6 +9086,238 @@ function syncSimulationButtons() {
     if (stopBtn) {
         stopBtn.disabled = !ebikeAnimationRunning;
     }
+
+    updateBatteryOperationButtons();
+}
+
+function updateBatteryOperationButtons() {
+    const filterBtn = document.getElementById('battery-filter-btn');
+    const routeBtn = document.getElementById('battery-route-btn');
+    const thresholdSelect = document.getElementById('battery-threshold');
+    const capacityInput = document.getElementById('battery-capacity');
+    const roleTip = document.getElementById('battery-role-tip');
+    const adminControls = document.getElementById('battery-admin-controls');
+    const dispatcherControls = document.getElementById('battery-dispatcher-controls');
+    const tableTitle = document.getElementById('battery-table-title');
+    const isAdmin = currentUserRole === 'admin';
+    const disabled = !isAdmin;
+
+    if (adminControls) {
+        adminControls.style.display = isAdmin ? '' : 'none';
+    }
+    if (dispatcherControls) {
+        dispatcherControls.style.display = isAdmin ? 'none' : '';
+    }
+    if (tableTitle) {
+        tableTitle.textContent = isAdmin ? '低电量车辆列表' : '负责路线服务车辆列表';
+    }
+
+    if (filterBtn) {
+        filterBtn.disabled = disabled;
+        filterBtn.title = isAdmin ? '' : '当前角色仅可查看管理员已生成的换电任务';
+    }
+    if (routeBtn) {
+        routeBtn.disabled = disabled;
+        routeBtn.title = isAdmin ? '' : '当前角色仅可查看管理员已生成的换电任务';
+    }
+    if (thresholdSelect) {
+        thresholdSelect.disabled = disabled;
+        thresholdSelect.title = isAdmin ? '' : '调度员视图为只读';
+    }
+    if (capacityInput) {
+        capacityInput.disabled = disabled;
+        capacityInput.title = isAdmin ? '' : '调度员视图为只读';
+    }
+    if (roleTip) {
+        roleTip.style.display = isAdmin ? 'none' : 'block';
+    }
+}
+
+function getBatteryCapacityValue() {
+    const input = document.getElementById('battery-capacity');
+    const value = Number(input?.value);
+    const normalized = Number.isFinite(value) ? Math.max(1, Math.floor(value)) : BATTERY_DEFAULT_CAPACITY;
+    if (input) {
+        input.value = String(normalized);
+    }
+    return normalized;
+}
+
+function setBatteryCapacityValue(value) {
+    const input = document.getElementById('battery-capacity');
+    if (!input) {
+        return;
+    }
+    const normalized = Number.isFinite(Number(value)) ? Math.max(1, Math.floor(Number(value))) : BATTERY_DEFAULT_CAPACITY;
+    input.value = String(normalized);
+}
+
+function loadBatteryOpsState() {
+    try {
+        const raw = localStorage.getItem(BATTERY_STATE_STORAGE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function saveBatteryOpsState(state) {
+    try {
+        localStorage.setItem(BATTERY_STATE_STORAGE_KEY, JSON.stringify(state || {}));
+    } catch (_) {
+        // ignore storage failure
+    }
+}
+
+function clearBatteryOpsPersistedState() {
+    try {
+        localStorage.removeItem(BATTERY_STATE_STORAGE_KEY);
+    } catch (_) {
+        // ignore storage failure
+    }
+}
+
+function resetBatteryOpsStateForNewLogin() {
+    clearBatteryOpsPersistedState();
+
+    batteryRouteAssignments = {};
+    batteryLastRouteResult = null;
+    currentLowBatteryList = [];
+    dispatcherSelectedVehicleKey = '';
+
+    batteryRouteLines = [];
+    lowBatteryMarkers = [];
+
+    const thresholdSelect = document.getElementById('battery-threshold');
+    const capacityInput = document.getElementById('battery-capacity');
+    const dispatchInput = document.getElementById('battery-dispatch-vehicle-id');
+    const tbody = document.getElementById('battery-table-body');
+
+    if (thresholdSelect) {
+        thresholdSelect.value = '30';
+    }
+    if (capacityInput) {
+        capacityInput.value = String(BATTERY_DEFAULT_CAPACITY);
+    }
+    if (dispatchInput) {
+        dispatchInput.value = '';
+    }
+    if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
+    }
+
+    updateLowBatteryMetric(0);
+    updateBatteryResultPanel({
+        lowCount: 0,
+        vehicleCount: 0,
+        routeCount: 0,
+        capacityPerTrip: BATTERY_DEFAULT_CAPACITY,
+        routes: []
+    });
+}
+
+function persistBatteryOpsSnapshot() {
+    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const capacity = getBatteryCapacityValue();
+    const dispatchInput = document.getElementById('battery-dispatch-vehicle-id');
+    dispatcherSelectedVehicleKey = String(dispatchInput?.value || dispatcherSelectedVehicleKey || '').trim();
+    saveBatteryOpsState({
+        updatedAt: Date.now(),
+        threshold,
+        capacity_per_trip: capacity,
+        low_bikes: currentLowBatteryList,
+        route_result: batteryLastRouteResult,
+        assignments: batteryRouteAssignments,
+        dispatcher_vehicle_key: dispatcherSelectedVehicleKey
+    });
+}
+
+function hydrateBatteryOpsView() {
+    const thresholdSelect = document.getElementById('battery-threshold');
+    const tbody = document.getElementById('battery-table-body');
+    const dispatchInput = document.getElementById('battery-dispatch-vehicle-id');
+    const state = loadBatteryOpsState();
+
+    if (state) {
+        if (thresholdSelect && Number.isFinite(Number(state.threshold))) {
+            thresholdSelect.value = String(Number(state.threshold));
+        }
+        setBatteryCapacityValue(state.capacity_per_trip);
+
+        if (dispatchInput) {
+            const vehicleKey = String(state.dispatcher_vehicle_key || '').trim();
+            dispatchInput.value = vehicleKey;
+            dispatcherSelectedVehicleKey = vehicleKey;
+        }
+
+        if (Array.isArray(state.low_bikes)) {
+            currentLowBatteryList = state.low_bikes.map((b, idx) => normalizeBatteryBikeRecord(b, idx)).filter(Boolean);
+            if (currentUserRole === 'admin') {
+                renderLowBatteryMarkers(currentLowBatteryList);
+                updateLowBatteryMetric(currentLowBatteryList.length);
+            } else {
+                clearLowBatteryMarkers();
+                updateLowBatteryMetric(0);
+            }
+        }
+
+        if (state.assignments && typeof state.assignments === 'object') {
+            batteryRouteAssignments = state.assignments;
+        }
+
+        if (state.route_result && typeof state.route_result === 'object') {
+            batteryLastRouteResult = state.route_result;
+            clearBatteryRouteLines();
+            if (currentUserRole === 'admin') {
+                drawBatteryRoute(state.route_result, state.route_result?.bike_count || currentLowBatteryList.length, {
+                    silentToast: true,
+                    skipPersist: true
+                });
+            } else {
+                applyDispatcherVehicleFilter({
+                    silent: true,
+                    skipPersist: true,
+                    noInputToast: true,
+                    autoHydrate: true
+                });
+            }
+        } else {
+            batteryLastRouteResult = null;
+            updateBatteryResultPanel({
+                lowCount: currentLowBatteryList.length,
+                vehicleCount: 0,
+                routeCount: 0,
+                capacityPerTrip: getBatteryCapacityValue(),
+                routes: []
+            });
+        }
+    } else {
+        setBatteryCapacityValue(BATTERY_DEFAULT_CAPACITY);
+        updateBatteryResultPanel({
+            lowCount: currentLowBatteryList.length,
+            vehicleCount: batteryLastRouteResult?.vehicle_count || 0,
+            routeCount: batteryLastRouteResult?.route_count || 0,
+            capacityPerTrip: getBatteryCapacityValue(),
+            routes: batteryLastRouteResult?.routes || []
+        });
+    }
+
+    if (tbody && currentUserRole === 'admin') {
+        renderBatteryTableRows(currentLowBatteryList, tbody);
+    }
+
+    if (currentUserRole !== 'admin') {
+        applyDispatcherVehicleFilter({
+            silent: true,
+            skipPersist: true,
+            noInputToast: true,
+            autoHydrate: true
+        });
+    }
+
+    updateBatteryOperationButtons();
 }
 
 function bindSimulationModuleButtons() {
@@ -9079,6 +9350,20 @@ function bindSimulationModuleButtons() {
     }
 
     syncSimulationButtons();
+    updateBatteryOperationButtons();
+}
+
+function bindBatteryDispatcherControls() {
+    const input = document.getElementById('battery-dispatch-vehicle-id');
+    if (input && !input.dataset.bound) {
+        input.dataset.bound = '1';
+        input.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                applyDispatcherVehicleFilter();
+            }
+        });
+    }
 }
 
 function clearBatteryRouteLines() {
@@ -9090,6 +9375,208 @@ function clearBatteryRouteLines() {
         }
     });
     batteryRouteLines = [];
+}
+
+function clearLowBatteryMarkers() {
+    if (!map) { lowBatteryMarkers = []; return; }
+    lowBatteryMarkers.forEach(m => { try { map.removeOverlay(m); } catch (_) {} });
+    lowBatteryMarkers = [];
+}
+
+function makeLowBatteryIcon(level) {
+    // 简单 SVG 低电量图标（红/橙根据电量）
+    const color = level <= 15 ? '#e53935' : (level <= 25 ? '#fb8c00' : '#ffb300');
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 32 32'>
+        <circle cx='16' cy='16' r='14' fill='${color}' stroke='white' stroke-width='2'/>
+        <rect x='9' y='10' width='12' height='10' rx='1.5' fill='none' stroke='white' stroke-width='1.8'/>
+        <rect x='21' y='13' width='2.5' height='4' rx='0.5' fill='white'/>
+        <rect x='10.5' y='11.5' width='${Math.max(1, (level/100) * 9)}' height='7' fill='white'/>
+        </svg>`;
+    return new BMap.Icon('data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg),
+        new BMap.Size(32, 32), { anchor: new BMap.Size(16, 16) });
+}
+
+// 使用最近邻规则生成换电任务访问顺序（前端仅作兜底展示）
+function orderBikesByNearestNeighbor(bikes, start) {
+    const remain = bikes.slice();
+    const path = [];
+    let cur = start;
+    while (remain.length > 0) {
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        for (let i = 0; i < remain.length; i++) {
+            const d = calcDistanceMeters(cur.lat, cur.lng, remain[i].lat, remain[i].lng);
+            if (d < bestDist) { bestDist = d; bestIdx = i; }
+        }
+        const next = remain.splice(bestIdx, 1)[0];
+        path.push(next);
+        cur = next;
+    }
+    return path;
+}
+
+function normalizeBatteryBikeRecord(raw, index) {
+    const lngRaw = Number(raw?.lng);
+    const latRaw = Number(raw?.lat);
+    if (!Number.isFinite(lngRaw) || !Number.isFinite(latRaw)) {
+        return null;
+    }
+
+    const normalized = normalizeBikeToBd09(lngRaw, latRaw);
+    const batteryVal = Number(raw?.battery);
+    const idRaw = raw?.id != null ? String(raw.id) : String(index + 1);
+
+    return {
+        id: idRaw.startsWith('ebike_') ? idRaw : ('ebike_' + idRaw),
+        lng: normalized ? normalized.lng : lngRaw,
+        lat: normalized ? normalized.lat : latRaw,
+        battery: Number.isFinite(batteryVal) ? batteryVal : 100,
+        last_used: raw?.last_used || raw?.lastUsed || raw?.time_slot || '-',
+        status: raw?.status || 'idle',
+        speed: Number(raw?.speed) || 0
+    };
+}
+
+function updateLowBatteryMetric(count) {
+    const el = document.getElementById('low-battery-bikes');
+    if (el) {
+        el.textContent = String(count);
+    }
+}
+
+function updateBatteryResultPanel(result) {
+    const lowEl = document.getElementById('battery-low-count');
+    const vehicleEl = document.getElementById('battery-vehicle-count');
+    const routeEl = document.getElementById('battery-route-count');
+    const capacityEl = document.getElementById('battery-capacity-show');
+    const detailEl = document.getElementById('battery-route-detail');
+
+    if (!result) {
+        if (lowEl) lowEl.textContent = '0';
+        if (vehicleEl) vehicleEl.textContent = '0';
+        if (routeEl) routeEl.textContent = '0';
+        if (capacityEl) capacityEl.textContent = String(getBatteryCapacityValue());
+        if (detailEl) detailEl.textContent = '尚未生成换电路线';
+        return;
+    }
+
+    if (lowEl) lowEl.textContent = String(result.lowCount || 0);
+    if (vehicleEl) vehicleEl.textContent = String(result.vehicleCount || 0);
+    if (routeEl) routeEl.textContent = String(result.routeCount || 0);
+    if (capacityEl) capacityEl.textContent = String(result.capacityPerTrip || result.capacity_per_trip || getBatteryCapacityValue());
+
+    if (detailEl) {
+        const routes = Array.isArray(result.routes) ? result.routes : [];
+        if (!routes.length) {
+            detailEl.textContent = '尚未生成换电路线';
+        } else {
+            detailEl.innerHTML = routes.map(route => {
+                const name = route.vehicle_name || route.vehicleName || route.route_name || '-';
+                const cnt = Number(route.service_count || route.serviceCount || 0);
+                const start = route.start_point;
+                const end = route.end_point;
+                const startText = start ? `${Number(start.lng).toFixed(5)}, ${Number(start.lat).toFixed(5)}` : '-';
+                const endText = end ? `${Number(end.lng).toFixed(5)}, ${Number(end.lat).toFixed(5)}` : '-';
+                const depot = route.service_point_name || route.route_depot_name || '-';
+                const dist = Number(route.total_distance_m || 0);
+                return `<div style="padding:6px 0;border-bottom:1px dashed #e0e0e0;">
+                    <div class="dispatch-row" style="border-bottom:0;padding:0;">
+                        <span class="dispatch-label">${name}</span>
+                        <span class="dispatch-value">服务 ${cnt} 辆 / ${dist.toFixed(1)} m</span>
+                    </div>
+                    <div style="font-size:12px;color:#666;line-height:1.5;">补给点：${depot}</div>
+                    <div style="font-size:12px;color:#666;line-height:1.5;">起点：${startText}</div>
+                    <div style="font-size:12px;color:#666;line-height:1.5;">终点：${endText}</div>
+                </div>`;
+            }).join('');
+        }
+    }
+}
+
+function renderBatteryTableRows(lowBattery, tbody) {
+    if (!tbody) {
+        return;
+    }
+
+    if (!Array.isArray(lowBattery) || lowBattery.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">当前无低电量车辆</td></tr>';
+        return;
+    }
+
+    const rows = lowBattery.slice().sort((a, b) => {
+        const assignA = batteryRouteAssignments[a.id] || {};
+        const assignB = batteryRouteAssignments[b.id] || {};
+        const orderA = Number(assignA.service_order);
+        const orderB = Number(assignB.service_order);
+        const hasA = Number.isFinite(orderA);
+        const hasB = Number.isFinite(orderB);
+
+        if (hasA && hasB && orderA !== orderB) {
+            return orderA - orderB;
+        }
+        if (hasA && !hasB) {
+            return -1;
+        }
+        if (!hasA && hasB) {
+            return 1;
+        }
+
+        return Number(a.battery) - Number(b.battery);
+    });
+
+    tbody.innerHTML = rows.map(bike => {
+        const levelColor = bike.battery <= 15 ? '#e53935' : '#fb8c00';
+        const assignObj = batteryRouteAssignments[bike.id] || {};
+        const assign = assignObj.route_name || assignObj.vehicle_name || '-';
+        const order = Number.isFinite(Number(assignObj.service_order)) ? Number(assignObj.service_order) : '-';
+        return `<tr>
+            <td>${bike.id}</td>
+            <td>${bike.lng.toFixed(5)}, ${bike.lat.toFixed(5)}</td>
+            <td style="color:${levelColor};font-weight:600;">${Math.round(bike.battery)}%</td>
+            <td>${assign}</td>
+            <td>${order}</td>
+        </tr>`;
+    }).join('');
+}
+
+function renderLowBatteryMarkers(lowBattery) {
+    if (!map || typeof BMap === 'undefined') {
+        return;
+    }
+
+    clearLowBatteryMarkers();
+    lowBattery.forEach(bike => {
+        try {
+            const marker = new BMap.Marker(new BMap.Point(bike.lng, bike.lat), {
+                icon: makeLowBatteryIcon(Number(bike.battery) || 0)
+            });
+            marker.setTitle(`${bike.id} 电量 ${Math.round(bike.battery)}%`);
+            map.addOverlay(marker);
+            lowBatteryMarkers.push(marker);
+        } catch (_) {
+            // ignore individual marker errors
+        }
+    });
+}
+
+async function fetchLowBatteryFromApi(threshold) {
+    const url = `/api/battery/low?threshold=${encodeURIComponent(threshold)}`;
+    const response = await fetch(url, { cache: 'no-store' });
+    if (!response.ok) {
+        throw new Error('HTTP ' + response.status);
+    }
+
+    const data = await response.json();
+    const bikes = Array.isArray(data?.bikes) ? data.bikes : [];
+    return bikes
+        .map((b, idx) => normalizeBatteryBikeRecord(b, idx))
+        .filter(Boolean)
+        .sort((a, b) => Number(a.battery) - Number(b.battery));
+}
+
+async function getLowBatteryCandidates(threshold) {
+    const fromApi = await fetchLowBatteryFromApi(threshold);
+    return { bikes: fromApi, source: 'api' };
 }
 
 function buildRoadNetworkFromGeoJSON(geojson) {
@@ -9387,6 +9874,9 @@ function generateMockEbikeData(count, timeSlot) {
         if (!normalized) continue;
 
         const moving = Math.random() > 0.35;
+        const minutesAgo = Math.floor(Math.random() * 180);
+        const lastUsedAt = new Date(Date.now() - minutesAgo * 60000);
+        const pad = n => String(n).padStart(2, '0');
         data.push({
             id: 'ebike_' + (i + 1),
             lat: normalized.lat,
@@ -9394,6 +9884,7 @@ function generateMockEbikeData(count, timeSlot) {
             status: moving ? 'moving' : 'idle',
             battery: Math.floor(35 + Math.random() * 65),
             speed: moving ? Math.floor(12 + Math.random() * 14) : 0,
+            last_used: `${pad(lastUsedAt.getHours())}:${pad(lastUsedAt.getMinutes())}`,
             path: null,
             pathIndex: 0,
             progress: 0
@@ -9652,7 +10143,6 @@ function clearEbikeSimulation(silent) {
 
     ebikeSimMarkers = [];
     ebikeSimData = [];
-    clearBatteryRouteLines();
 
     const simStatsCard = document.getElementById('ebike-sim-stats-card');
     if (simStatsCard) {
@@ -9676,9 +10166,15 @@ function clearEbikeSimulation(silent) {
     }
 }
 
-// 筛选低电量车辆
-function filterLowBattery() {
+// 筛选低电量车辆（独立于电单车模拟模块）
+async function filterLowBattery() {
+    if (currentUserRole !== 'admin') {
+        showToast('当前角色无权限执行电池运维操作');
+        return;
+    }
+
     const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const capacity = getBatteryCapacityValue();
     const tbody = document.getElementById('battery-table-body');
 
     if (!tbody) {
@@ -9686,44 +10182,80 @@ function filterLowBattery() {
         return;
     }
 
-    if (ebikeSimData.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">请先生成电单车模拟数据</td></tr>';
-        showToast('请先生成电单车模拟数据');
+    let lowBattery = [];
+    let source = 'api';
+    try {
+        const result = await getLowBatteryCandidates(threshold);
+        lowBattery = result.bikes;
+        source = result.source;
+    } catch (err) {
+        console.error('读取低电量数据失败:', err);
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">低电量数据读取失败</td></tr>';
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        updateBatteryResultPanel({ lowCount: 0, vehicleCount: 0, routeCount: 0, capacityPerTrip: capacity, routes: [] });
+        showToast('低电量数据读取失败');
         return;
     }
 
-    const lowBattery = ebikeSimData
-        .filter(bike => Number(bike.battery) <= threshold)
-        .sort((a, b) => Number(a.battery) - Number(b.battery));
+    clearBatteryRouteLines();
+    batteryRouteAssignments = {};
+    batteryLastRouteResult = null;
+    currentLowBatteryList = lowBattery.slice();
+    updateLowBatteryMetric(lowBattery.length);
+    updateBatteryResultPanel({
+        lowCount: lowBattery.length,
+        vehicleCount: 0,
+        routeCount: 0,
+        capacityPerTrip: capacity,
+        routes: []
+    });
+    persistBatteryOpsSnapshot();
 
     if (lowBattery.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">当前无低电量车辆</td></tr>';
+        renderBatteryTableRows([], tbody);
+        clearLowBatteryMarkers();
         showToast('当前无低电量车辆');
         return;
     }
 
-    tbody.innerHTML = lowBattery.map(bike => {
-        const levelColor = bike.battery <= 15 ? '#e53935' : '#fb8c00';
-        return `<tr>
-            <td>${bike.id}</td>
-            <td>${bike.lng.toFixed(5)}, ${bike.lat.toFixed(5)}</td>
-            <td style="color:${levelColor};font-weight:600;">${Math.round(bike.battery)}%</td>
-            <td>${bike.time_slot || '-'}</td>
-        </tr>`;
-    }).join('');
-
-    showToast(`已筛选出 ${lowBattery.length} 辆低电量车辆`);
+    renderBatteryTableRows(lowBattery, tbody);
+    renderLowBatteryMarkers(lowBattery);
+    if (source === 'api') {
+        showToast(`已从后端读取并筛选 ${lowBattery.length} 辆低电量车辆`);
+    } else {
+        showToast(`已筛选出 ${lowBattery.length} 辆低电量车辆`);
+    }
 }
 
-// 生成换电路线
-function generateBatteryRoute() {
+// 生成换电任务路线（后端负责核心分组与路网规划）
+async function generateBatteryRoute() {
+    if (currentUserRole !== 'admin') {
+        showToast('当前角色无权限执行电池运维操作');
+        return;
+    }
+
     if (!map) {
         showToast('地图尚未初始化');
         return;
     }
 
     const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
-    const lowBattery = ebikeSimData.filter(bike => Number(bike.battery) <= threshold);
+    const capacity = getBatteryCapacityValue();
+    let lowBattery = currentLowBatteryList.slice();
+
+    if (lowBattery.length === 0) {
+        try {
+            const result = await getLowBatteryCandidates(threshold);
+            lowBattery = result.bikes;
+        } catch (err) {
+            console.error('读取低电量数据失败:', err);
+            showToast('读取低电量数据失败，无法生成路线');
+            return;
+        }
+    }
+
+    currentLowBatteryList = lowBattery.slice();
 
     if (lowBattery.length === 0) {
         showToast('无低电量车辆可生成路线');
@@ -9732,64 +10264,385 @@ function generateBatteryRoute() {
 
     clearBatteryRouteLines();
 
-    const servicePoints = [];
-    if (smartMarkers.length > 0) {
-        smartMarkers.forEach(item => {
-            if (Number.isFinite(item?.lng) && Number.isFinite(item?.lat)) {
-                servicePoints.push({ lng: item.lng, lat: item.lat });
-            }
-        });
-    }
-    if (manualMarkers.length > 0) {
-        manualMarkers.forEach(item => {
-            if (Number.isFinite(item?.lng) && Number.isFinite(item?.lat)) {
-                servicePoints.push({ lng: item.lng, lat: item.lat });
-            }
-        });
-    }
-    if (servicePoints.length === 0) {
-        servicePoints.push({ lng: CAMPUS_CENTER_BD09[0], lat: CAMPUS_CENTER_BD09[1] });
-    }
+    // 按新规则：所有换电运维车统一从校园中心补给点出发并回到同一终点
+    const servicePoints = [
+        { lng: CAMPUS_CENTER_BD09[0], lat: CAMPUS_CENTER_BD09[1], name: '校园中心补给点' }
+    ];
 
-    lowBattery.forEach(bike => {
-        let target = servicePoints[0];
-        let minDist = calcDistanceMeters(bike.lat, bike.lng, target.lat, target.lng);
-
-        for (let i = 1; i < servicePoints.length; i++) {
-            const point = servicePoints[i];
-            const dist = calcDistanceMeters(bike.lat, bike.lng, point.lat, point.lng);
-            if (dist < minDist) {
-                minDist = dist;
-                target = point;
-            }
+    try {
+        const response = await fetch('/api/battery/route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bikes: lowBattery.map(b => ({ id: b.id, lng: b.lng, lat: b.lat, battery: b.battery, last_used: b.last_used })),
+                service_points: servicePoints,
+                threshold,
+                capacity_per_trip: capacity
+            })
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
         }
+        const data = await response.json();
+        drawBatteryRoute(data, lowBattery.length);
+    } catch (err) {
+        console.error('生成换电路线失败:', err);
+        showToast('生成换电路线失败，请稍后重试');
+    }
+}
 
-        const line = new BMap.Polyline([
-            new BMap.Point(bike.lng, bike.lat),
-            new BMap.Point(target.lng, target.lat)
-        ], {
-            strokeColor: '#ff9800',
-            strokeWeight: 2,
-            strokeOpacity: 0.85,
-            strokeStyle: 'dashed'
+function normalizeRoutePoint(p) {
+    const lng = Number(p?.lng);
+    const lat = Number(p?.lat);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+        return null;
+    }
+    return { lng, lat };
+}
+
+function calcDirectionAngle(fromPoint, toPoint) {
+    const dx = Number(toPoint.lng) - Number(fromPoint.lng);
+    const dy = Number(toPoint.lat) - Number(fromPoint.lat);
+    const rad = Math.atan2(dy, dx);
+    return rad * 180 / Math.PI;
+}
+
+function offsetPointByMeters(basePoint, eastMeters, northMeters) {
+    const lat = Number(basePoint?.lat);
+    const lng = Number(basePoint?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return basePoint;
+    }
+
+    const latRad = lat * Math.PI / 180;
+    const dLat = northMeters / 110540;
+    const dLng = eastMeters / (111320 * Math.max(Math.cos(latRad), 0.00001));
+    return {
+        lng: lng + dLng,
+        lat: lat + dLat
+    };
+}
+
+function getRouteMarkerDisplayPoint(basePoint, routeIndex, routeCount, markerType) {
+    const total = Math.max(1, Number(routeCount) || 1);
+    const idx = Math.max(0, Number(routeIndex) || 0);
+    const baseAngle = (360 / total) * idx;
+    const isEnd = markerType === 'end';
+    const angleDeg = baseAngle + (isEnd ? 170 : 20);
+    const radius = isEnd ? 18 : 12;
+    const rad = angleDeg * Math.PI / 180;
+    const east = radius * Math.cos(rad);
+    const north = radius * Math.sin(rad);
+    return offsetPointByMeters(basePoint, east, north);
+}
+
+function addBatteryRouteArrows(routePoints, color) {
+    if (!Array.isArray(routePoints) || routePoints.length < 2 || typeof BMap === 'undefined') {
+        return;
+    }
+
+    const step = Math.max(1, Math.floor(routePoints.length / 6));
+    for (let i = step; i < routePoints.length; i += step) {
+        const prev = routePoints[i - 1];
+        const curr = routePoints[i];
+        if (!prev || !curr) continue;
+
+        try {
+            const angle = calcDirectionAngle(prev, curr);
+            const arrowSymbol = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+                scale: 0.65,
+                strokeWeight: 1,
+                strokeColor: color,
+                fillColor: color,
+                fillOpacity: 0.9,
+                rotation: angle + BATTERY_ARROW_ROTATION_OFFSET
+            });
+            const arrowMarker = new BMap.Marker(new BMap.Point(curr.lng, curr.lat), { icon: arrowSymbol });
+            map.addOverlay(arrowMarker);
+            batteryRouteLines.push(arrowMarker);
+        } catch (_) {
+            // ignore single arrow render failure
+        }
+    }
+}
+
+function getRouteIndexToken(text) {
+    const match = String(text || '').match(/(\d+)/);
+    return match ? Number(match[1]) : null;
+}
+
+function routeMatchesVehicleKey(route, vehicleKey) {
+    const key = String(vehicleKey || '').trim();
+    if (!key) {
+        return false;
+    }
+
+    const loweredKey = key.toLowerCase();
+    const candidates = [
+        String(route?.vehicle_id || ''),
+        String(route?.vehicle_name || ''),
+        String(route?.route_name || '')
+    ].map(v => v.trim()).filter(Boolean);
+
+    if (candidates.some(v => v.toLowerCase() === loweredKey)) {
+        return true;
+    }
+
+    const keyIndex = getRouteIndexToken(key);
+    if (!Number.isFinite(keyIndex)) {
+        return false;
+    }
+
+    return candidates.some(v => getRouteIndexToken(v) === keyIndex);
+}
+
+function buildScopedAssignmentsForRoute(route, allAssignments) {
+    const scoped = {};
+    const ordered = Array.isArray(route?.ordered_bikes) ? route.ordered_bikes : [];
+    ordered.forEach((bike, idx) => {
+        if (!bike?.id) return;
+        const fromAll = (allAssignments && allAssignments[bike.id]) || {};
+        scoped[bike.id] = {
+            route_name: fromAll.route_name || route?.route_name || '-',
+            vehicle_name: fromAll.vehicle_name || route?.vehicle_name || '-',
+            service_order: Number(fromAll.service_order) || Number(bike.service_order) || (idx + 1)
+        };
+    });
+    return scoped;
+}
+
+function getDispatcherScopedBikes(route, scopedAssignments) {
+    const ordered = Array.isArray(route?.ordered_bikes) ? route.ordered_bikes : [];
+    if (ordered.length > 0) {
+        return ordered.map((bike, idx) => {
+            const normalized = normalizeBatteryBikeRecord(bike, idx);
+            if (!normalized) return null;
+            const assignment = scopedAssignments[normalized.id] || {};
+            return {
+                ...normalized,
+                service_order: Number(assignment.service_order) || Number(bike.service_order) || (idx + 1)
+            };
+        }).filter(Boolean);
+    }
+
+    const routeName = String(route?.route_name || '').trim();
+    return (currentLowBatteryList || []).filter(bike => {
+        const assignment = batteryRouteAssignments[bike.id] || {};
+        return String(assignment.route_name || '').trim() === routeName;
+    });
+}
+
+function setBatteryRouteDetailHint(text) {
+    const detailEl = document.getElementById('battery-route-detail');
+    if (detailEl) {
+        detailEl.textContent = text;
+    }
+}
+
+function applyDispatcherVehicleFilter(options) {
+    const opts = options || {};
+    if (currentUserRole === 'admin') {
+        return;
+    }
+
+    const input = document.getElementById('battery-dispatch-vehicle-id');
+    const tbody = document.getElementById('battery-table-body');
+    const allRoutes = Array.isArray(batteryLastRouteResult?.routes) ? batteryLastRouteResult.routes : [];
+    const allAssignments = batteryLastRouteResult?.bike_assignments && typeof batteryLastRouteResult.bike_assignments === 'object'
+        ? batteryLastRouteResult.bike_assignments
+        : {};
+
+    const vehicleKey = String(opts.vehicleKey != null ? opts.vehicleKey : (input?.value || '')).trim();
+    dispatcherSelectedVehicleKey = vehicleKey;
+    if (input && opts.vehicleKey != null) {
+        input.value = vehicleKey;
+    }
+
+    if (!allRoutes.length) {
+        clearBatteryRouteLines();
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        batteryRouteAssignments = {};
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">暂无可查看的换电任务</td></tr>';
+        }
+        updateBatteryResultPanel({
+            lowCount: 0,
+            vehicleCount: 0,
+            routeCount: 0,
+            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+            routes: []
         });
+        setBatteryRouteDetailHint('管理员尚未下发可查看的换电任务');
+        return;
+    }
 
-        map.addOverlay(line);
-        batteryRouteLines.push(line);
+    if (!vehicleKey) {
+        clearBatteryRouteLines();
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        batteryRouteAssignments = {};
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请输入负责运维车编号后查看</td></tr>';
+        }
+        updateBatteryResultPanel({
+            lowCount: 0,
+            vehicleCount: 0,
+            routeCount: 0,
+            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+            routes: []
+        });
+        setBatteryRouteDetailHint('请输入负责运维车编号后查看路线明细');
+        if (!opts.noInputToast && !opts.silent) {
+            showToast('请输入负责运维车编号');
+        }
+        if (!opts.skipPersist) {
+            persistBatteryOpsSnapshot();
+        }
+        return;
+    }
+
+    const matchedRoute = allRoutes.find(route => routeMatchesVehicleKey(route, vehicleKey));
+    if (!matchedRoute) {
+        clearBatteryRouteLines();
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        batteryRouteAssignments = {};
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">未找到该运维车对应路线，请检查编号</td></tr>';
+        }
+        updateBatteryResultPanel({
+            lowCount: 0,
+            vehicleCount: 0,
+            routeCount: 0,
+            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+            routes: []
+        });
+        setBatteryRouteDetailHint('未匹配到负责路线，请确认运维车编号');
+        if (!opts.silent) {
+            showToast('未找到该运维车对应路线');
+        }
+        if (!opts.skipPersist) {
+            persistBatteryOpsSnapshot();
+        }
+        return;
+    }
+
+    const scopedAssignments = buildScopedAssignmentsForRoute(matchedRoute, allAssignments);
+    const scopedBikes = getDispatcherScopedBikes(matchedRoute, scopedAssignments);
+    const scopedResult = {
+        routes: [matchedRoute],
+        vehicle_count: 1,
+        route_count: 1,
+        bike_count: scopedBikes.length,
+        capacity_per_trip: batteryLastRouteResult?.capacity_per_trip || matchedRoute?.capacity_per_trip || getBatteryCapacityValue(),
+        bike_assignments: scopedAssignments
+    };
+
+    clearBatteryRouteLines();
+    renderLowBatteryMarkers(scopedBikes);
+    updateLowBatteryMetric(scopedBikes.length);
+    drawBatteryRoute(scopedResult, scopedBikes.length, {
+        silentToast: true,
+        skipPersist: true,
+        updateGlobalState: false,
+        tableBikes: scopedBikes
     });
 
-    showToast(`已为 ${lowBattery.length} 辆低电量车辆生成换电路线`);
+    if (!opts.silent) {
+        const vehicleName = matchedRoute?.vehicle_name || matchedRoute?.vehicle_id || vehicleKey;
+        showToast(`已切换到 ${vehicleName} 的负责路线`);
+    }
+    if (!opts.skipPersist) {
+        persistBatteryOpsSnapshot();
+    }
+}
+
+function drawBatteryRoute(routeResult, totalBikes, options) {
+    if (!map) return;
+
+    const drawOptions = options || {};
+    const routes = Array.isArray(routeResult) ? routeResult : (routeResult?.routes || []);
+    const routeCount = routes.length;
+    const assignments = routeResult?.bike_assignments && typeof routeResult.bike_assignments === 'object'
+        ? routeResult.bike_assignments
+        : {};
+    batteryRouteAssignments = assignments;
+
+    routes.forEach((route, idx) => {
+        const pts = Array.isArray(route?.points) ? route.points.map(normalizeRoutePoint).filter(Boolean) : route;
+        if (!pts || pts.length < 2) return;
+
+        const color = route?.route_color || BATTERY_ROUTE_COLORS[idx % BATTERY_ROUTE_COLORS.length] || '#28a745';
+        const routeName = route?.route_name || `换电任务路线${idx + 1}`;
+        const vehicleName = route?.vehicle_name || `换电运维车${idx + 1}`;
+
+        const polyline = new BMap.Polyline(pts.map(p => new BMap.Point(p.lng, p.lat)), {
+            strokeColor: color,
+            strokeWeight: 4,
+            strokeOpacity: 0.85,
+            strokeStyle: 'solid'
+        });
+        map.addOverlay(polyline);
+        batteryRouteLines.push(polyline);
+        addBatteryRouteArrows(pts, color);
+
+        const ordered = Array.isArray(route?.ordered_bikes) ? route.ordered_bikes : [];
+        ordered.forEach((b, orderIdx) => {
+            if (!b?.id) return;
+            batteryRouteAssignments[b.id] = {
+                route_name: routeName,
+                vehicle_name: vehicleName,
+                service_order: Number(b?.service_order) || (orderIdx + 1)
+            };
+        });
+    });
+
+    if (routes.length > 0) {
+        const sharedDepot = {
+            lng: CAMPUS_CENTER_BD09[0],
+            lat: CAMPUS_CENTER_BD09[1]
+        };
+        const depotMarker = new BMap.Marker(new BMap.Point(sharedDepot.lng, sharedDepot.lat));
+        try {
+            const depotLabel = new BMap.Label('换电路线起终点', { offset: new BMap.Size(12, -16) });
+            depotLabel.setStyle({ borderColor: '#28a745', color: '#1f1f1f', backgroundColor: '#f3fff3' });
+            depotMarker.setLabel(depotLabel);
+        } catch (_) {}
+        map.addOverlay(depotMarker);
+        batteryRouteLines.push(depotMarker);
+    }
+
+    const tableBikes = Array.isArray(drawOptions.tableBikes) ? drawOptions.tableBikes : currentLowBatteryList;
+    const tbody = document.getElementById('battery-table-body');
+    if (tbody) {
+        renderBatteryTableRows(tableBikes, tbody);
+    }
+
+    updateBatteryResultPanel({
+        lowCount: routeResult?.bike_count || totalBikes || tableBikes.length,
+        vehicleCount: routeResult?.vehicle_count || routes.length,
+        routeCount: routeResult?.route_count || routes.length,
+        capacityPerTrip: routeResult?.capacity_per_trip || getBatteryCapacityValue(),
+        routes: routes
+    });
+
+    const updateGlobalState = drawOptions.updateGlobalState !== false;
+    if (updateGlobalState) {
+        batteryLastRouteResult = routeResult;
+    }
+    if (!drawOptions.skipPersist && updateGlobalState) {
+        persistBatteryOpsSnapshot();
+    }
+
+    if (!drawOptions.silentToast) {
+        showToast(`已为 ${totalBikes} 辆低电量车辆生成换电任务路线`);
+    }
 }
 
 // 清除模拟
 function clearSimulation() {
     clearEbikeSimulation(true);
-
-    const tbody = document.getElementById('battery-table-body');
-    if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="4" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
-    }
-
     showToast('模拟数据已清除');
 }
 
@@ -9826,6 +10679,7 @@ window.onload = function() {
 
 
         bindSimulationModuleButtons();
+        bindBatteryDispatcherControls();
 
 
 

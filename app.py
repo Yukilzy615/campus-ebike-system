@@ -18,6 +18,7 @@ from flask_cors import CORS
 from algorithms.location_opt import run_location_optimization
 from algorithms.dispatch_opt import run_dispatch_optimization
 from algorithms.bike_simulator import generate_bike_simulation
+from algorithms.battery_opt import get_low_battery_vehicles, plan_battery_routes
 
 # ----------------------------- 初始化Flask -----------------------------
 app = Flask(__name__, static_folder='static')
@@ -385,6 +386,53 @@ def bike_simulation():
 def get_roads():
     """获取过滤后的路网数据"""
     return jsonify(filtered_roads_geojson)
+
+# ----------------------------- 电池运维 -----------------------------
+@app.route('/api/battery/low', methods=['GET'])
+def battery_low():
+    """返回低电量车辆列表；若样本不足会自动补强用于运维演示。"""
+    threshold = float(request.args.get('threshold', 30) or 30)
+    min_count = int(request.args.get('min_count', 40) or 40)
+
+    try:
+        bikes = get_low_battery_vehicles(
+            threshold=threshold,
+            min_count=min_count,
+            data_dir=os.path.join(os.path.dirname(__file__), DATA_DIR),
+            roads_geojson=filtered_roads_geojson
+        )
+        return jsonify({'threshold': threshold, 'bikes': bikes})
+    except Exception as e:
+        return jsonify({'threshold': threshold, 'bikes': [], 'error': str(e)})
+
+
+@app.route('/api/battery/route', methods=['POST'])
+def battery_route():
+    """生成换电运维路线：低电量车辆分组 + 多车多路线，尽量沿真实路网。"""
+    data = request.get_json(silent=True) or {}
+    bikes = [b for b in (data.get('bikes') or []) if isinstance(b, dict) and 'lng' in b and 'lat' in b]
+    service_points = [p for p in (data.get('service_points') or []) if isinstance(p, dict) and 'lng' in p and 'lat' in p]
+    threshold = float(data.get('threshold', 30) or 30)
+    capacity_per_trip = int(data.get('capacity_per_trip', 6) or 6)
+
+    if not bikes:
+        bikes = get_low_battery_vehicles(
+            threshold=threshold,
+            min_count=30,
+            data_dir=os.path.join(os.path.dirname(__file__), DATA_DIR),
+            roads_geojson=filtered_roads_geojson
+        )
+
+    try:
+        result = plan_battery_routes(
+            low_bikes=bikes,
+            service_points=service_points,
+            roads_geojson=filtered_roads_geojson,
+            capacity_per_trip=capacity_per_trip
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'routes': [], 'error': str(e)}), 500
 
 # ----------------------------- 前端入口 -----------------------------
 @app.route('/')

@@ -288,6 +288,14 @@ let dispatchFeatures = [];
 
 let dispatchCache = {};
 
+let supplyDemandCalcCache = {};
+
+let pointsV2Cache = null;
+
+let pointsV2LoadingPromise = null;
+
+let pointsV2LoadFailed = false;
+
 let selectedScheme = 'auto';
 
 let currentDispatchScheme = '待选择';
@@ -418,47 +426,35 @@ const MOCK_HEATMAP_DATA = {
 
 
 
-        [114.3658, 30.5339, 0.8],
+        [30.5310, 114.3545, 95], [30.5307, 114.3545, 90], [30.5302, 114.3547, 85],
 
 
 
-        [114.3654, 30.5331, 0.7],
+        [30.5314, 114.3545, 88], [30.5302, 114.3536, 82], [30.5307, 114.3526, 78],
 
 
 
-        [114.3660, 30.5317, 0.9],
+        [30.5301, 114.3526, 80], [30.5311, 114.3536, 85], [30.5309, 114.3519, 75],
 
 
 
-        [114.3679, 30.5313, 0.8],
+        [30.5305, 114.3517, 72], [30.5300, 114.3519, 70], [30.5317, 114.3545, 80],
 
 
 
-        [114.3648, 30.5325, 0.6],
+        [30.5288, 114.3535, 45], [30.5285, 114.3524, 42], [30.5294, 114.3495, 35],
 
 
 
-        [114.3658, 30.5312, 0.8],
+        [30.5288, 114.3557, 15], [30.5284, 114.3569, 12], [30.5288, 114.3568, 10],
 
 
 
-        [114.3670, 30.5299, 0.5],
+        [30.5279, 114.3546, 18], [30.5283, 114.3546, 15], [30.5294, 114.3515, 20],
 
 
 
-        [114.3628, 30.5325, 0.4],
-
-
-
-        [114.3637, 30.5338, 0.7],
-
-
-
-        [114.3668, 30.5343, 0.6],
-
-
-
-        [114.3662, 30.5357, 0.5]
+        [30.5270, 114.3558, 40], [30.5335, 114.3576, 30], [30.5327, 114.3597, 25]
 
 
 
@@ -470,47 +466,27 @@ const MOCK_HEATMAP_DATA = {
 
 
 
-        [114.3658, 30.5339, 0.5],
+        [30.5307, 114.3537, 95], [30.5296, 114.3530, 90], [30.5293, 114.3531, 85],
 
 
 
-        [114.3654, 30.5331, 0.4],
+        [30.5328, 114.3550, 80], [30.5327, 114.3526, 75],
 
 
 
-        [114.3660, 30.5317, 0.6],
+        [30.5288, 114.3557, 60], [30.5288, 114.3568, 55], [30.5284, 114.3569, 50],
 
 
 
-        [114.3679, 30.5313, 0.5],
+        [30.5283, 114.3546, 45], [30.5279, 114.3546, 40], [30.5297, 114.3510, 42],
 
 
 
-        [114.3648, 30.5325, 0.9],
+        [30.5310, 114.3545, 35], [30.5307, 114.3526, 30], [30.5314, 114.3556, 28],
 
 
 
-        [114.3658, 30.5312, 0.6],
-
-
-
-        [114.3670, 30.5299, 0.4],
-
-
-
-        [114.3628, 30.5325, 0.5],
-
-
-
-        [114.3637, 30.5338, 0.4],
-
-
-
-        [114.3668, 30.5343, 0.7],
-
-
-
-        [114.3662, 30.5357, 0.8]
+        [30.5314, 114.3556, 50]
 
 
 
@@ -522,47 +498,35 @@ const MOCK_HEATMAP_DATA = {
 
 
 
-        [114.3658, 30.5339, 0.9],
+        [30.5288, 114.3557, 15], [30.5284, 114.3569, 12], [30.5288, 114.3568, 10],
 
 
 
-        [114.3654, 30.5331, 0.8],
+        [30.5283, 114.3546, 15], [30.5279, 114.3546, 12], [30.5294, 114.3515, 18],
 
 
 
-        [114.3660, 30.5317, 0.5],
+        [30.5297, 114.3510, 15],
 
 
 
-        [114.3679, 30.5313, 0.4],
+        [30.5310, 114.3545, 95], [30.5307, 114.3545, 92], [30.5302, 114.3547, 88],
 
 
 
-        [114.3648, 30.5325, 0.8],
+        [30.5314, 114.3545, 85], [30.5302, 114.3536, 80], [30.5307, 114.3526, 75],
 
 
 
-        [114.3658, 30.5312, 0.4],
+        [30.5309, 114.3519, 70], [30.5311, 114.3536, 78], [30.5305, 114.3517, 68],
 
 
 
-        [114.3670, 30.5299, 0.6],
+        [30.5307, 114.3537, 50], [30.5296, 114.3530, 45],
 
 
 
-        [114.3628, 30.5325, 0.5],
-
-
-
-        [114.3637, 30.5338, 0.9],
-
-
-
-        [114.3668, 30.5343, 0.5],
-
-
-
-        [114.3662, 30.5357, 0.7]
+        [30.5270, 114.3558, 55], [30.5335, 114.3576, 40]
 
 
 
@@ -604,41 +568,31 @@ function wgs84ToBd09(lng, lat) {
     try {
 
 
-
         const result = gcoord.transform(
-
 
 
             [lng, lat],
 
 
-
             gcoord.WGS84,
-
 
 
             gcoord.BD09
 
 
-
         );
-
 
 
         return { lng: result[0], lat: result[1] };
 
 
-
     } catch (error) {
-
 
 
         console.error('坐标转换失津:', error);
 
 
-
         return { lng, lat };
-
 
 
     }
@@ -646,7 +600,6 @@ function wgs84ToBd09(lng, lat) {
 
 
 }
-
 
 
 
@@ -724,7 +677,6 @@ function bd09ToWgs84(lng, lat) {
 
 
 
-
 // 计算两点之间的距离（米）
 
 
@@ -739,13 +691,10 @@ function calcDistanceMeters(lat1, lng1, lat2, lng2) {
     const φ1 = lat1 * Math.PI / 180;
 
 
-
     const φ2 = lat2 * Math.PI / 180;
 
 
-
     const Δφ = (lat2 - lat1) * Math.PI / 180;
-
 
 
     const Δλ = (lng2 - lng1) * Math.PI / 180;
@@ -754,23 +703,16 @@ function calcDistanceMeters(lat1, lng1, lat2, lng2) {
 
 
 
-
-
     const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-
 
 
         Math.cos(φ1) * Math.cos(φ2) *
 
 
-
         Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
 
 
-
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-
 
 
 
@@ -1962,71 +1904,30 @@ function clearManualLocations() {
 
 function runSmartLocation() {
 
-
-
     showProgress('正在运行智能选址算法...');
 
+    const count = parseInt(document.getElementById('smart-count')?.value) || 10;
+    const serviceRadius = parseInt(document.getElementById('service-radius')?.value) || currentServiceRadius || 100;
+    const objCoverage = !!document.getElementById('obj-coverage')?.checked;
+    const objDistance = !!document.getElementById('obj-distance')?.checked;
+    const objBalance = !!document.getElementById('obj-balance')?.checked;
 
-
-
-
-
-
-    const count = parseInt(document.getElementById('smart-count').value) || 10;
-
-
-
-    const objCoverage = document.getElementById('obj-coverage').checked;
-
-
-
-    const objDistance = document.getElementById('obj-distance').checked;
-
-
-
-    const objBalance = document.getElementById('obj-balance').checked;
-
-
-
-
-
-
-
-    // 模拟API氃用
-
-
+    currentServiceRadius = serviceRadius;
 
     setTimeout(() => {
-
-
-
-        const result = generateMockLocations(count, objCoverage, objDistance, objBalance);
-
-
-
-        renderSmartLocations(result);
-
-
-
-        hideProgress();
-
-
-
-        showToast('智能选址完成，共生成 ' + result.features.length + ' 个选址常');
-
-
-
-    }, 1000);
-
-
-
+        try {
+            const result = generateMockLocations(count, objCoverage, objDistance, objBalance);
+            renderSmartLocations(result);
+            updateSchemeStatusDisplay();
+            showToast('智能选址完成，共生成 ' + result.features.length + ' 个选址点');
+        } catch (error) {
+            console.error('智能选址执行失败:', error);
+            showToast('智能选址失败，请重试');
+        } finally {
+            hideProgress();
+        }
+    }, 200);
 }
-
-
-
-
-
-
 
 // 生成模拟选址数据
 
@@ -2709,7 +2610,7 @@ function renderSmartLocations(geoJson) {
 
 
 
-        const [lng, lat] = feature.geometry.coordinates;
+        const [rawLng, rawLat] = feature.geometry.coordinates;
 
 
 
@@ -2725,17 +2626,22 @@ function renderSmartLocations(geoJson) {
 
 
 
+        let lng = Number(rawLng);
+        let lat = Number(rawLat);
+        if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+            console.warn('智能选址点坐标无效:', feature.geometry.coordinates);
+            return;
+        }
+
         if (!isInsideBoundary(lat, lng)) {
-
-
-
-            console.warn('智能选址点不在边界内:', { lat, lng });
-
-
-
-            return; // 淳濇不在边界内的常
-
-
+            const converted = wgs84ToBd09(lng, lat);
+            if (Number.isFinite(converted.lng) && Number.isFinite(converted.lat) && isInsideBoundary(converted.lat, converted.lng)) {
+                lng = converted.lng;
+                lat = converted.lat;
+            } else {
+                console.warn('智能选址点不在边界内:', { rawLat, rawLng });
+                return;
+            }
         }
 
 
@@ -2954,13 +2860,11 @@ function renderSmartLocations(geoJson) {
 
     updateSmartCoverage();
 
+    updateSchemeStatusDisplay();
+
 
 
     updateCoreMetrics();
-
-
-
-    updateSchemeStatusDisplay();
 
 
 
@@ -3774,6 +3678,222 @@ function generateSupplyDemandTable(timeSlot) {
 
 
     console.log('generateSupplyDemandTable called with timeSlot:', timeSlot);
+
+    const _v2Tbody = document.getElementById('supply-demand-body');
+    if (!_v2Tbody) {
+        return;
+    }
+
+    const _v2HasSmartPoints = smartMarkers.length > 0;
+    const _v2HasManualPoints = manualMarkers.length > 0;
+    if (!_v2HasSmartPoints && !_v2HasManualPoints) {
+        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+        return;
+    }
+
+    let _v2ActiveScheme = selectedScheme || 'auto';
+    if (_v2ActiveScheme === 'auto') {
+        _v2ActiveScheme = getEffectiveScheme();
+    } else if (_v2ActiveScheme === 'smart' && !_v2HasSmartPoints) {
+        _v2ActiveScheme = _v2HasManualPoints ? 'manual' : 'none';
+    } else if (_v2ActiveScheme === 'manual' && !_v2HasManualPoints) {
+        _v2ActiveScheme = _v2HasSmartPoints ? 'smart' : 'none';
+    }
+
+    const _v2Markers = _v2ActiveScheme === 'smart' ? smartMarkers : (_v2ActiveScheme === 'manual' ? manualMarkers : []);
+    if (!_v2Markers || _v2Markers.length === 0) {
+        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+        return;
+    }
+
+    const _v2MarkerCoords = _v2Markers.map((item, idx) => {
+        if (item && item.marker && typeof item.marker.getPosition === 'function') {
+            const pos = item.marker.getPosition();
+            if (pos && Number.isFinite(pos.lat) && Number.isFinite(pos.lng)) {
+                return { idx, lat: pos.lat, lng: pos.lng };
+            }
+        }
+        if (item && item.lat != null && item.lng != null) {
+            return { idx, lat: item.lat, lng: item.lng };
+        }
+        return { idx, lat: NaN, lng: NaN };
+    });
+
+    const _v2CoordsSig = _v2MarkerCoords
+        .map(m => Number.isFinite(m.lat) && Number.isFinite(m.lng)
+            ? `${m.idx}:${m.lat.toFixed(6)},${m.lng.toFixed(6)}`
+            : `${m.idx}:na`)
+        .join('|');
+    const _v2CacheKey = `${timeSlot}|${_v2ActiveScheme}|${_v2CoordsSig}`;
+
+    const _v2RenderRows = (rows) => {
+        _v2Tbody.innerHTML = rows.map(item => {
+            const status = item.status === 'surplus'
+                ? '<span style="color:#27ae60">过剩</span>'
+                : (item.status === 'shortage'
+                    ? '<span style="color:#e74c3c">不足</span>'
+                    : '<span style="color:#999">平衡</span>');
+            const transferStr = item.transfer !== 0 ? Math.abs(item.transfer) + '辆' : '-';
+            return `<tr>
+                <td>${item.name}</td>
+                <td>${item.current}</td>
+                <td>${item.demand}</td>
+                <td>${status}</td>
+                <td>${transferStr}</td>
+            </tr>`;
+        }).join('');
+    };
+
+    if (supplyDemandCalcCache[_v2CacheKey]) {
+        _v2RenderRows(supplyDemandCalcCache[_v2CacheKey]);
+        return;
+    }
+
+    const _v2Rules = {
+        morning: { '宿舍': -1.2, '教学楼': 1.0, '食堂': 0.3, '校门': 0.3, '图书馆': 0.2, '其他': 0.1 },
+        noon: { '食堂': 0.8, '教学楼': -0.6, '宿舍': 0.4, '图书馆': 0.2, '其他': 0.2 },
+        evening: { '宿舍': -1.0, '教学楼': 0.8, '食堂': 0.3, '图书馆': 0.3, '其他': 0.4 }
+    };
+    const _v2Rule = _v2Rules[timeSlot] || _v2Rules.morning;
+
+    const _v2FallbackPoiSamples = [
+        { lat: 30.5339, lng: 114.3658, category: '宿舍', weight: 1.0 },
+        { lat: 30.5338, lng: 114.3637, category: '宿舍', weight: 0.8 },
+        { lat: 30.5331, lng: 114.3654, category: '宿舍', weight: 0.7 },
+        { lat: 30.5317, lng: 114.3660, category: '教学楼', weight: 0.9 },
+        { lat: 30.5313, lng: 114.3679, category: '教学楼', weight: 0.6 },
+        { lat: 30.5312, lng: 114.3658, category: '教学楼', weight: 0.5 },
+        { lat: 30.5336, lng: 114.3648, category: '食堂', weight: 0.9 },
+        { lat: 30.5325, lng: 114.3648, category: '食堂', weight: 0.7 },
+        { lat: 30.5357, lng: 114.3662, category: '食堂', weight: 0.6 },
+        { lat: 30.5341, lng: 114.3668, category: '图书馆', weight: 0.5 },
+        { lat: 30.5299, lng: 114.3670, category: '校门', weight: 0.5 },
+        { lat: 30.5320, lng: 114.3665, category: '其他', weight: 0.3 }
+    ];
+
+    if (!pointsV2Cache && !pointsV2LoadFailed) {
+        if (!pointsV2LoadingPromise) {
+            pointsV2LoadingPromise = fetch('./pointsV2.geojson', { cache: 'no-store' })
+                .then(res => {
+                    if (!res.ok) {
+                        throw new Error('HTTP ' + res.status);
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    const features = Array.isArray(data?.features) ? data.features : [];
+                    pointsV2Cache = features
+                        .map(feature => {
+                            const coords = feature?.geometry?.coordinates;
+                            if (!Array.isArray(coords) || coords.length < 2) {
+                                return null;
+                            }
+                            const lng = Number(coords[0]);
+                            const lat = Number(coords[1]);
+                            if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+                                return null;
+                            }
+                            return {
+                                lng,
+                                lat,
+                                category: feature?.properties?.category || '其他',
+                                weight: Number(feature?.properties?.weight) || 1.0
+                            };
+                        })
+                        .filter(Boolean);
+
+                    if (!pointsV2Cache.length) {
+                        throw new Error('pointsV2.geojson 无可用点位');
+                    }
+                })
+                .catch(err => {
+                    pointsV2LoadFailed = true;
+                    console.warn('pointsV2.geojson 加载失败，回退到内置POI样本:', err);
+                })
+                .finally(() => {
+                    pointsV2LoadingPromise = null;
+                });
+        }
+
+        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">正在加载供需POI数据...</td></tr>';
+        pointsV2LoadingPromise?.then(() => generateSupplyDemandTable(timeSlot));
+        return;
+    }
+
+    const _v2PoiSamples = (Array.isArray(pointsV2Cache) && pointsV2Cache.length > 0)
+        ? pointsV2Cache
+        : _v2FallbackPoiSamples;
+
+    let _v2TotalDemand = 0;
+    const _v2Drafts = [];
+
+    _v2MarkerCoords.forEach(({ idx, lat, lng }) => {
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            return;
+        }
+
+        let _v2Score = 0;
+        _v2PoiSamples.forEach(poi => {
+            const directDist = Math.hypot(lng - poi.lng, lat - poi.lat) * 111000;
+            let dist = directDist;
+
+            if (typeof wgs84ToBd09 === 'function') {
+                const converted = wgs84ToBd09(poi.lng, poi.lat);
+                if (Number.isFinite(converted?.lng) && Number.isFinite(converted?.lat)) {
+                    const convertedDist = Math.hypot(lng - converted.lng, lat - converted.lat) * 111000;
+                    dist = Math.min(directDist, convertedDist);
+                }
+            }
+
+            if (dist < 300) {
+                const weight = (poi.weight || 1.0) / Math.max(15, dist);
+                _v2Score += weight * (_v2Rule[poi.category] || 0);
+            }
+        });
+
+        const _v2Demand = 15 + ((idx * 3) % 20);
+        _v2TotalDemand += _v2Demand;
+
+        _v2Drafts.push({
+            name: `${_v2ActiveScheme === 'smart' ? '智能点' : '人工点'}${idx + 1}`,
+            demand: _v2Demand,
+            rawSupply: _v2Demand + _v2Score * 120
+        });
+    });
+
+    if (_v2Drafts.length === 0) {
+        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+        return;
+    }
+
+    const _v2TargetTotalSupply = _v2TotalDemand * 1.05;
+    const _v2CurrentTotalSupply = _v2Drafts.reduce((sum, s) => sum + s.rawSupply, 0);
+    const _v2SafeTotalSupply = Math.abs(_v2CurrentTotalSupply) < 1e-6 ? 1 : _v2CurrentTotalSupply;
+    const _v2GlobalScale = _v2TargetTotalSupply / _v2SafeTotalSupply;
+
+    const _v2Rows = _v2Drafts.map(s => {
+        const current = Math.max(2, Math.round(s.rawSupply * _v2GlobalScale));
+        const transfer = s.demand - current;
+
+        let status = 'balanced';
+        if (transfer < -2) {
+            status = 'surplus';
+        } else if (transfer > 2) {
+            status = 'shortage';
+        }
+
+        return {
+            name: s.name,
+            current,
+            demand: s.demand,
+            status,
+            transfer
+        };
+    });
+
+    supplyDemandCalcCache[_v2CacheKey] = _v2Rows;
+    _v2RenderRows(_v2Rows);
+    return;
 
 
 
@@ -4783,11 +4903,11 @@ function updateSchemeStatusDisplay() {
 
 
 
-            ? ('已编编辑（' + manualMarkers.length + '点）')
+            ? ('已编辑（' + manualMarkers.length + '点）')
 
 
 
-            : '未编编辑（0点）';
+            : '未编辑（0点）';
 
 
 
@@ -6988,6 +7108,54 @@ function updateHeatmap() {
 
 
 
+function renderHeatmap(points) {
+    const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
+    const maxCount = Math.max(100, points.reduce((max, p) => Math.max(max, p.count), 1));
+
+    if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
+        if (!heatmapLayer) {
+            heatmapLayer = new BMapLib.HeatmapOverlay({
+                radius: 25,
+                gradient: {
+                    0.4: 'blue',
+                    0.6: 'cyan',
+                    0.7: 'lime',
+                    0.8: 'yellow',
+                    1.0: 'red'
+                }
+            });
+            map.addOverlay(heatmapLayer);
+        }
+
+        heatmapLayer.setDataSet({ data: points, max: maxCount });
+        if (showHeatmap) {
+            heatmapLayer.show();
+        } else {
+            heatmapLayer.hide();
+        }
+        return;
+    }
+
+    points.forEach(p => {
+        const markerPoint = new BMap.Point(p.lng, p.lat);
+        const normalized = Math.max(0, Math.min(1, p.count / maxCount));
+        const size = 6 + normalized * 16;
+
+        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+            scale: size / 10,
+            strokeWeight: 0,
+            fillColor: getHeatmapColor(normalized),
+            fillOpacity: 0.55
+        });
+
+        const marker = new BMap.Marker(markerPoint, { icon });
+        marker.setVisible(showHeatmap);
+        map.addOverlay(marker);
+        heatmapMarkers.push(marker);
+    });
+}
+
+
     if (!map) {
         showToast('地图尚未初始化');
         return;
@@ -7002,6 +7170,40 @@ function updateHeatmap() {
     }
 
     const timeSlot = document.getElementById('heatmap-time')?.value || 'morning';
+
+    showProgress('正在生成热力图...');
+    setTimeout(() => {
+        try {
+            const rawHeatmapData = (MOCK_HEATMAP_DATA[timeSlot] || []).map(point => {
+                if (!Array.isArray(point) || point.length < 3) {
+                    return point;
+                }
+                const wgsLat = Number(point[0]);
+                const wgsLng = Number(point[1]);
+                const weight = Number(point[2]);
+                if (!Number.isFinite(wgsLat) || !Number.isFinite(wgsLng) || !Number.isFinite(weight)) {
+                    return point;
+                }
+                const bd = wgs84ToBd09(wgsLng, wgsLat);
+                return [bd.lng, bd.lat, weight];
+            });
+
+            const points = normalizeHeatmapData(rawHeatmapData);
+            if (points.length === 0) {
+                showToast('当前时段暂无热力图数据');
+                return;
+            }
+
+            renderHeatmap(points);
+            showToast('热力图更新完成');
+        } catch (error) {
+            console.error('更新热力图失败:', error);
+            showToast('热力图渲染失败，请重试');
+        } finally {
+            hideProgress();
+        }
+    }, 800);
+    return;
 
     fetch(`/api/heatmap-data?time=${timeSlot}`)
         .then(response => response.json())
@@ -8279,6 +8481,7 @@ window.onload = function() {
 
 
 };
+
 
 
 

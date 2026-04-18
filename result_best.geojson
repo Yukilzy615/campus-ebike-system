@@ -1,0 +1,181 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36588714299494,
+          30.536135164094876
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 1,
+        "name": "停车点1",
+        "capacity": 20,
+        "service_count": 100
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36948780434437,
+          30.535803063643076
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 2,
+        "name": "停车点2",
+        "capacity": 20,
+        "service_count": 110
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36826311170007,
+          30.5352264789314
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 3,
+        "name": "停车点3",
+        "capacity": 20,
+        "service_count": 120
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36938674385641,
+          30.534009706468893
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 4,
+        "name": "停车点4",
+        "capacity": 20,
+        "service_count": 130
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36938461796917,
+          30.53333753425095
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 5,
+        "name": "停车点5",
+        "capacity": 20,
+        "service_count": 140
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36701063430043,
+          30.532639798821776
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 6,
+        "name": "停车点6",
+        "capacity": 20,
+        "service_count": 150
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36826117058179,
+          30.532638793839695
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 7,
+        "name": "停车点7",
+        "capacity": 20,
+        "service_count": 160
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.3677518848527,
+          30.537320516857577
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 8,
+        "name": "停车点8",
+        "capacity": 20,
+        "service_count": 170
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36521831864023,
+          30.537688953699604
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 9,
+        "name": "停车点9",
+        "capacity": 20,
+        "service_count": 180
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          114.36391499411528,
+          30.537704900712235
+        ]
+      },
+      "properties": {
+        "selected": true,
+        "id": 10,
+        "name": "停车点10",
+        "capacity": 20,
+        "service_count": 190
+      }
+    }
+  ],
+  "metadata": {
+    "coverage": 0.3719298245614035,
+    "avg_distance": 63.73180034318262,
+    "K": 10,
+    "description": "Best solution"
+  }
+}

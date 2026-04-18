@@ -1,0 +1,8299 @@
+﻿// ==================== 全局变量和常量====================
+
+
+
+const API_BASE = 'http://127.0.0.1:5000/api/';
+
+
+
+const BAIDU_MAP_AK = 'E4805d16520de693a3fe707cdc962045'; // 百度地图 AK
+
+
+
+
+
+
+
+// 校园中心坐标（BD09格式，从百度地图获取
+
+
+const CAMPUS_CENTER_BD09 = [114.365, 30.533]; // 武汉大学信息学部中心
+
+
+
+
+
+
+
+// 校园边界范围（BD09格式，与智能选址候选点范围一致）
+
+
+// 数据已从WGS84转换为BD09，但CRS声明仍是CRS84
+
+
+
+// 武汉大学信息学部边界坐标（BD09格式，从WHUInfo_Area.geojson中提取）
+
+const CAMPUS_BOUNDARY_POLYGON = [
+
+    [114.3609866586929, 30.534688114577257],
+
+    [114.3609142339328, 30.53471072254468],
+
+    [114.36118463644388, 30.535415019877863],
+
+    [114.36132554315587, 30.535438844742853],
+
+    [114.36245624881417, 30.53564219753188],
+
+    [114.36247248246794, 30.535478268532767],
+
+    [114.3625289267156, 30.535323756222937],
+
+    [114.36254552421966, 30.534674575581665],
+
+    [114.36257703776674, 30.53467634361008],
+
+    [114.36300955709112, 30.534686353563906],
+
+    [114.36335425961177, 30.534697988526894],
+
+    [114.36363723064589, 30.53472824866947],
+
+    [114.36363202259396, 30.53513286932981],
+
+    [114.36367225119717, 30.53513334206993],
+
+    [114.36367220031204, 30.535331562557914],
+
+    [114.363430629229, 30.535335102834924],
+
+    [114.36318884046446, 30.535639017657413],
+
+    [114.3631617146435, 30.5360363290501],
+
+    [114.36351845031476, 30.5362851904538],
+
+    [114.36352102208751, 30.53644921779209],
+
+    [114.36375189041604, 30.536445611693555],
+
+    [114.36374099995719, 30.536674287905104],
+
+    [114.36337322579271, 30.536695778449857],
+
+    [114.36302132713001, 30.5370453495026],
+
+    [114.36356851309586, 30.537491424330412],
+
+    [114.3629400280813, 30.538082343469434],
+
+    [114.36379573595481, 30.538622092354508],
+
+    [114.36358567940238, 30.53886171932706],
+
+    [114.36377760057819, 30.539000748886014],
+
+    [114.36384635121203, 30.539002433473307],
+
+    [114.36411946946158, 30.538648589190363],
+
+    [114.3641629948038, 30.5386614567133],
+
+    [114.36529072843416, 30.538609532901162],
+
+    [114.36580084014811, 30.538344374939626],
+
+    [114.36592013751951, 30.538283329421798],
+
+    [114.36655102409823, 30.537972248732373],
+
+    [114.36689601298743, 30.537853703421995],
+
+    [114.36711398906357, 30.53779063277662],
+
+    [114.3676175751327, 30.537673590671712],
+
+    [114.36907710046447, 30.53716704103965],
+
+    [114.36931243276568, 30.53708479425076],
+
+    [114.36940425411701, 30.537039882543247],
+
+    [114.36943353026122, 30.53701914467341],
+
+    [114.36932760291964, 30.536787350484275],
+
+    [114.3693186357256, 30.53672395498471],
+
+    [114.3693222779695, 30.536175800393494],
+
+    [114.36942576979426, 30.535813643178944],
+
+    [114.36944652425115, 30.535797815796563],
+
+    [114.36946557434302, 30.534188228358285],
+
+    [114.37000138769315, 30.534202711870474],
+
+    [114.36993467429701, 30.533463347526187],
+
+    [114.36971289987115, 30.53289503967613],
+
+    [114.3696752709355, 30.53282248716026],
+
+    [114.36955100237988, 30.532544229459834],
+
+    [114.36961826149259, 30.532514132720028],
+
+    [114.36946526574923, 30.532186198324364],
+
+    [114.36897807989628, 30.531285489741837],
+
+    [114.3688559505414, 30.531118059000733],
+
+    [114.36874846522664, 30.531089323867334],
+
+    [114.36863009846984, 30.531163296633128],
+
+    [114.36842064723098, 30.53095074664678],
+
+    [114.36829169072792, 30.530992379739676],
+
+    [114.36787252338448, 30.531061668439236],
+
+    [114.3678187748022, 30.530994644583927],
+
+    [114.36772520277391, 30.53102191585694],
+
+    [114.36755230706686, 30.531044836975827],
+
+    [114.36749095421125, 30.531292634140776],
+
+    [114.3669991439199, 30.531534847150745],
+
+    [114.36655456156026, 30.531605877853877],
+
+    [114.36592454292305, 30.531595131234916],
+
+    [114.3659234927408, 30.531671338967676],
+
+    [114.36578758928715, 30.531729249327267],
+
+    [114.36578479561493, 30.532324418847224],
+
+    [114.36400770834065, 30.53233039954737],
+
+    [114.3639253790833, 30.532276563806068],
+
+    [114.36387439401616, 30.532344865485854],
+
+    [114.36387285894077, 30.53239556559563],
+
+    [114.36384535127759, 30.533252757564945],
+
+    [114.36156418317931, 30.53313530515497],
+
+    [114.36156755596778, 30.532886595868334],
+
+    [114.36147703563435, 30.532885025423408],
+
+    [114.36105085644274, 30.533034456827334],
+
+    [114.3611566276169, 30.533383806447564],
+
+    [114.36095535471142, 30.53344945940783],
+
+    [114.36108921900093, 30.533803906442326],
+
+    [114.3609684811367, 30.53383539435926],
+
+    [114.36104616510792, 30.534009240864563],
+
+    [114.3608207956116, 30.53407240564798],
+
+    [114.36102428835689, 30.53451975095849],
+
+    [114.36094114657772, 30.53456309054514],
+
+    [114.3609866586929, 30.534688114577257]
+
+];
+
+
+
+
+
+
+
+// 全局变量
+
+
+
+let map;
+
+
+
+let activeMapProvider = 'baidu';
+
+
+
+let currentMode = 'view'; // 'view', 'add', 'edit'
+
+let currentServiceRadius = 100;
+
+let smartMarkers = [];
+
+let manualMarkers = [];
+
+let smartCircles = [];
+
+let manualCircles = [];
+
+let dispatchLayers = [];
+
+let dispatchLines = [];
+
+let dispatchMarkers = [];
+
+let poiMarkers = [];
+
+let comparisonChart = null;
+
+let usageChart = null;
+
+let predictionChart = null;
+
+const SMART_ICON_URL = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiI+PHBvbHlnb24gcG9pbnRzPSI2LDAsMTIsMTIsMCwxMiIgZmlsbD0iIzFhNzNlOCIvPjwvc3ZnPg==';
+
+const MANUAL_ICON_URL = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiI+PHBvbHlnb24gcG9pbnRzPSI2LDAsMTIsMTIsMCwxMiIgZmlsbD0iI2VhNDMzNSIvPjwvc3ZnPg==';
+
+let campusBoundaryLayer = [];
+
+let smartMetrics = {
+
+    coverage: 0,
+
+    avg_distance: 0,
+
+    balance: 0,
+
+    capacity: 0
+
+};
+
+let manualLocationMetrics = null;
+
+let dispatchFeatures = [];
+
+let dispatchCache = {};
+
+let selectedScheme = 'auto';
+
+let currentDispatchScheme = '待选择';
+
+let latestSmartLocationResult = null;
+
+let savedPredictionData = null;
+
+let currentPOIData = null;
+
+let currentPoiSource = 'mock';
+
+
+
+// 真实路网数据（由 loadRealRoadNetwork 加载）
+
+const realRoadNetwork = {
+
+    nodes: {},
+
+    edges: []
+
+};
+
+
+
+// 兜底的模拟路网数据
+
+const mockRoadNetwork = {
+
+    type: "FeatureCollection",
+
+    features: [
+
+        {
+
+            type: "Feature",
+
+            geometry: {
+
+                type: "LineString",
+
+                coordinates: [
+
+                    [114.3658, 30.5302],
+
+                    [114.3660, 30.5295],
+
+                    [114.3657, 30.5288]
+
+                ]
+
+            }
+
+        },
+
+        {
+
+            type: "Feature",
+
+            geometry: {
+
+                type: "LineString",
+
+                coordinates: [
+
+                    [114.3625, 30.5305],
+
+                    [114.3635, 30.5302],
+
+                    [114.3637, 30.5307],
+
+                    [114.3645, 30.5295],
+
+                    [114.3660, 30.5295]
+
+                ]
+
+            }
+
+        },
+
+        {
+
+            type: "Feature",
+
+            geometry: {
+
+                type: "LineString",
+
+                coordinates: [
+
+                    [114.3640, 30.5318],
+
+                    [114.3652, 30.5318],
+
+                    [114.3656, 30.5314],
+
+                    [114.3658, 30.5302],
+
+                    [114.3667, 30.5284]
+
+                ]
+
+            }
+
+        }
+
+    ]
+
+};
+
+
+
+
+
+
+
+// 模拟热力图数据（根据WHUInfo_Area.geojson的范围生成）
+
+
+
+const MOCK_HEATMAP_DATA = {
+
+
+
+    morning: [
+
+
+
+        [114.3658, 30.5339, 0.8],
+
+
+
+        [114.3654, 30.5331, 0.7],
+
+
+
+        [114.3660, 30.5317, 0.9],
+
+
+
+        [114.3679, 30.5313, 0.8],
+
+
+
+        [114.3648, 30.5325, 0.6],
+
+
+
+        [114.3658, 30.5312, 0.8],
+
+
+
+        [114.3670, 30.5299, 0.5],
+
+
+
+        [114.3628, 30.5325, 0.4],
+
+
+
+        [114.3637, 30.5338, 0.7],
+
+
+
+        [114.3668, 30.5343, 0.6],
+
+
+
+        [114.3662, 30.5357, 0.5]
+
+
+
+    ],
+
+
+
+    noon: [
+
+
+
+        [114.3658, 30.5339, 0.5],
+
+
+
+        [114.3654, 30.5331, 0.4],
+
+
+
+        [114.3660, 30.5317, 0.6],
+
+
+
+        [114.3679, 30.5313, 0.5],
+
+
+
+        [114.3648, 30.5325, 0.9],
+
+
+
+        [114.3658, 30.5312, 0.6],
+
+
+
+        [114.3670, 30.5299, 0.4],
+
+
+
+        [114.3628, 30.5325, 0.5],
+
+
+
+        [114.3637, 30.5338, 0.4],
+
+
+
+        [114.3668, 30.5343, 0.7],
+
+
+
+        [114.3662, 30.5357, 0.8]
+
+
+
+    ],
+
+
+
+    evening: [
+
+
+
+        [114.3658, 30.5339, 0.9],
+
+
+
+        [114.3654, 30.5331, 0.8],
+
+
+
+        [114.3660, 30.5317, 0.5],
+
+
+
+        [114.3679, 30.5313, 0.4],
+
+
+
+        [114.3648, 30.5325, 0.8],
+
+
+
+        [114.3658, 30.5312, 0.4],
+
+
+
+        [114.3670, 30.5299, 0.6],
+
+
+
+        [114.3628, 30.5325, 0.5],
+
+
+
+        [114.3637, 30.5338, 0.9],
+
+
+
+        [114.3668, 30.5343, 0.5],
+
+
+
+        [114.3662, 30.5357, 0.7]
+
+
+
+    ]
+
+
+
+};
+
+
+
+
+
+
+
+// 坐标转换函数（WGS84 常BD09常
+
+
+function wgs84ToBd09(lng, lat) {
+
+
+
+    if (typeof gcoord === 'undefined') {
+
+
+
+        console.warn('gcoord库未加载，使用原始坐标');
+
+
+
+        return { lng, lat };
+
+
+
+    }
+
+
+
+    try {
+
+
+
+        const result = gcoord.transform(
+
+
+
+            [lng, lat],
+
+
+
+            gcoord.WGS84,
+
+
+
+            gcoord.BD09
+
+
+
+        );
+
+
+
+        return { lng: result[0], lat: result[1] };
+
+
+
+    } catch (error) {
+
+
+
+        console.error('坐标转换失津:', error);
+
+
+
+        return { lng, lat };
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+function bd09ToWgs84(lng, lat) {
+
+
+
+    if (typeof gcoord === 'undefined') {
+
+
+
+        console.warn('gcoord库未加载，使用原始坐标');
+
+
+
+        return { lng, lat };
+
+
+
+    }
+
+
+
+    try {
+
+
+
+        const result = gcoord.transform(
+
+
+
+            [lng, lat],
+
+
+
+            gcoord.BD09,
+
+
+
+            gcoord.WGS84
+
+
+
+        );
+
+
+
+        return { lng: result[0], lat: result[1] };
+
+
+
+    } catch (error) {
+
+
+
+        console.error('坐标转换失津:', error);
+
+
+
+        return { lng, lat };
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 计算两点之间的距离（米）
+
+
+
+function calcDistanceMeters(lat1, lng1, lat2, lng2) {
+
+
+
+    const R = 6371e3; // 地球半径（米常
+
+
+    const φ1 = lat1 * Math.PI / 180;
+
+
+
+    const φ2 = lat2 * Math.PI / 180;
+
+
+
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+
+
+
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+
+
+
+
+
+
+
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+
+
+
+        Math.cos(φ1) * Math.cos(φ2) *
+
+
+
+        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+
+
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+
+
+
+
+
+
+    return R * c;
+
+
+
+}
+
+
+
+
+
+
+
+// 使用射线法判断点是否在多边形内
+
+function isPointInPolygon(lat, lng, polygon) {
+
+    let inside = false;
+
+    const n = polygon.length;
+
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+
+        const xi = polygon[i][0], yi = polygon[i][1];
+
+        const xj = polygon[j][0], yj = polygon[j][1];
+
+        if (((yi > lat) !== (yj > lat)) &&
+
+            (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
+
+            inside = !inside;
+
+        }
+
+    }
+
+    return inside;
+
+}
+
+
+
+// 检查点是否在校园边界内（使用真正的多边形边界）
+
+function isInsideBoundary(lat, lng) {
+
+    return isPointInPolygon(lat, lng, CAMPUS_BOUNDARY_POLYGON);
+
+}
+
+
+
+
+
+
+
+// 显示 Toast 消息
+
+
+
+function showToast(message) {
+
+
+
+    // 简单的 toast 实现
+
+
+
+    const toast = document.createElement('div');
+
+
+
+    toast.className = 'toast';
+
+
+
+    toast.textContent = message;
+
+
+
+    document.body.appendChild(toast);
+
+
+
+    setTimeout(() => toast.remove(), 3000);
+
+
+
+}
+
+
+
+
+
+
+
+// 显示进度常
+
+
+function showProgress(text) {
+
+
+
+    const overlay = document.getElementById('progress-overlay');
+
+
+
+    const progressText = document.getElementById('progress-text');
+
+
+
+    if (overlay && progressText) {
+
+
+
+        progressText.textContent = text;
+
+
+
+        overlay.style.display = 'flex';
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 隐藏进度常
+
+
+function hideProgress() {
+
+
+
+    const overlay = document.getElementById('progress-overlay');
+
+
+
+    if (overlay) {
+
+
+
+        overlay.style.display = 'none';
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// ==================== 地图初始常====================
+
+
+
+async function initMap() {
+
+
+
+    try {
+
+
+
+        // 强制重新初始化地常
+
+
+        activeMapProvider = 'baidu';
+
+
+
+
+
+
+
+        // 等待百度地图API加载
+
+
+
+        if (!window.BMap) {
+
+
+
+            try {
+
+
+
+                await new Promise((resolve, reject) => {
+
+
+
+                    const callbackName = '__baiduMapInit_' + Date.now();
+
+
+
+                    window[callbackName] = function() {
+
+
+
+                        resolve();
+
+
+
+                    };
+
+
+
+                    const script = document.createElement('script');
+
+
+
+                    script.src = 'https://api.map.baidu.com/api?v=3.0&ak=' + encodeURIComponent(BAIDU_MAP_AK) + '&callback=' + callbackName;
+
+
+
+                    script.onerror = function() {
+
+
+
+                        console.error('百度地图API加载失津');
+
+
+
+                        reject(new Error('百度地图API加载失津'));
+
+
+
+                    };
+
+
+
+                    document.head.appendChild(script);
+
+
+
+
+
+
+
+                    // 涅时处理
+
+
+
+                    setTimeout(() => {
+
+
+
+                        if (!window.BMap) {
+
+
+
+                            console.error('百度地图API加载涅时');
+
+
+
+                            reject(new Error('百度地图API加载涅时'));
+
+
+
+                        }
+
+
+
+                    }, 10000);
+
+
+
+                });
+
+
+
+                
+
+
+
+                // 加载热力图插常
+
+
+                await new Promise((resolve, reject) => {
+
+
+
+                    const script = document.createElement('script');
+
+
+
+                    script.src = 'https://api.map.baidu.com/library/Heatmap/2.0/src/Heatmap_min.js';
+
+
+
+                    script.onerror = function() {
+
+
+
+                        console.error('百度地图热力图插件加载失常');
+
+
+
+                        reject(new Error('百度地图热力图插件加载失常'));
+
+
+
+                    };
+
+
+
+                    script.onload = function() {
+
+
+
+                        // 检查热力图插件是否加载成功
+
+
+
+                        if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
+
+
+
+                            resolve();
+
+
+
+                        } else {
+
+
+
+                            // 热力图插件加载成功但 BMap.HeatmapLayer 未定义，可能需要再等待一会
+
+
+                            setTimeout(() => {
+
+
+
+                                if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
+
+
+
+                                    resolve();
+
+
+
+                                } else {
+
+
+
+                                    reject(new Error('百度地图热力图插件加载成功但 BMapLib.HeatmapOverlay 未定义'));
+
+
+
+                                }
+
+
+
+                            }, 1000);
+
+
+
+                        }
+
+
+
+                    };
+
+
+
+                    document.head.appendChild(script);
+
+
+
+
+
+
+
+                    // 涅时处理
+
+
+
+                    setTimeout(() => {
+
+
+
+                        if (!(window.BMapLib && window.BMapLib.HeatmapOverlay)) {
+
+
+
+                            console.error('百度地图热力图插件加载涅常');
+
+
+
+                            reject(new Error('百度地图热力图插件加载涅常'));
+
+
+
+                        }
+
+
+
+                    }, 10000);
+
+
+
+                });
+
+
+
+            } catch (error) {
+
+
+
+                console.error('百度地图API加载出错:', error);
+
+
+
+                // 即使API加载失津，也继续执桌，使用默认的地图功能
+
+
+
+            }
+
+
+
+        }
+
+
+
+
+
+
+
+        // 检查地图容常
+
+
+        const mapContainer = document.getElementById('map');
+
+
+
+        if (!mapContainer) {
+
+
+
+            console.error('地图容器不存常');
+
+
+
+            return;
+
+
+
+        }
+
+
+
+
+
+
+
+        // 清除旧地图实常
+
+
+        if (map) {
+
+
+
+            map.clearOverlays();
+
+
+
+            map = null;
+
+
+
+        }
+
+
+
+
+
+
+
+        // 创建百度地图实例
+
+
+
+        map = new BMap.Map('map');
+
+
+
+        const centerPoint = new BMap.Point(CAMPUS_CENTER_BD09[0], CAMPUS_CENTER_BD09[1]);
+
+
+
+        map.centerAndZoom(centerPoint, 16);
+
+
+
+        map.enableScrollWheelZoom(true);
+
+
+
+
+
+
+
+        console.info('百度地图 JS API 加载成功');
+
+
+
+
+
+
+        // 初始化菜单切换功能
+
+
+        initMenuSwitch('');
+
+
+
+
+
+
+
+        // 初始化校园切换功能
+
+
+        // initCampusSwitch(); // 暂时注释，毥函数未定常
+
+
+
+
+
+
+        // 地图点击事件
+
+
+
+        map.addEventListener('click', onMapClick);
+
+
+
+
+
+
+
+        // 立即绘制校园边界和加载POI数据
+
+
+
+        try {
+
+
+
+            console.log('开始绘制校园边界');
+
+
+
+            drawCampusBoundary();
+
+
+
+            console.log('开始加常POI 数据');
+
+
+
+            loadMapData();
+
+
+
+        } catch (error) {
+
+
+
+            console.error('初始化后操作出错:', error);
+
+
+
+        }
+
+
+
+    } catch (error) {
+
+
+
+        console.error('地图初始化出常', error);
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 地图点击事件处理
+
+
+
+function onMapClick(e) {
+
+
+
+    if (currentMode === 'add') {
+
+
+
+        const point = e.point;
+
+
+
+        const lat = point.lat;
+
+
+
+        const lng = point.lng;
+
+
+
+
+
+
+
+        // 检查是否在校园边界常
+
+
+        if (!isInsideBoundary(lat, lng)) {
+
+
+
+            showToast('请在校园边界内添加选址点');
+
+
+
+            return;
+
+
+
+        }
+
+
+
+
+
+
+
+        // 使用 BMap.Symbol 创建三三角形标记（红扲常
+
+
+        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+
+
+
+            scale: 0.8,
+
+
+
+            strokeWeight: 1,
+
+
+
+            strokeColor: '#ea4335',
+
+
+
+            fillColor: '#ea4335',
+
+
+
+            fillOpacity: 0.9
+
+
+
+        });
+
+
+
+
+
+
+
+        const marker = new BMap.Marker(point, { icon, enableDragging: true });
+
+
+
+
+
+
+
+        // 拽结束事件
+
+
+
+        marker.addEventListener('dragend', function(e) {
+
+
+
+            const newPoint = e.point;
+
+
+
+            const idx = manualMarkers.findIndex(m => m.marker === this);
+
+
+
+            if (idx >= 0) {
+
+
+
+                manualMarkers[idx].lat = newPoint.lat;
+
+
+
+                manualMarkers[idx].lng = newPoint.lng;
+
+
+
+                // 更新覆盖范围常
+
+
+                if (manualCircles[idx]) {
+
+
+
+                    map.removeOverlay(manualCircles[idx]);
+
+
+
+                    manualCircles[idx] = new BMap.Circle(
+
+
+
+                        new BMap.Point(newPoint.lng, newPoint.lat),
+
+
+
+                        currentServiceRadius,
+
+
+
+                        {
+
+
+
+                            strokeColor: '#ea4335',
+
+
+
+                            strokeWeight: 1,
+
+
+
+                            fillColor: '#ea4335',
+
+
+
+                            fillOpacity: 0.15
+
+
+
+                        }
+
+
+
+                    );
+
+
+
+                    map.addOverlay(manualCircles[idx]);
+
+
+
+                }
+
+
+
+                // 重新计算指标
+
+
+
+                const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+
+
+
+                manualLocationMetrics = calculateCoreMetrics(points);
+
+
+
+                updateCoreMetrics();
+
+
+
+                updateManualCoverage();
+
+
+
+            }
+
+
+
+        });
+
+
+
+
+
+
+
+        // 右键删除
+
+
+
+        marker.addEventListener('rightclick', function(e) {
+
+
+
+            const idx = manualMarkers.findIndex(m => m.marker === this);
+
+
+
+            if (idx >= 0) {
+
+
+
+                map.removeOverlay(this);
+
+
+
+                if (manualCircles[idx]) {
+
+
+
+                    map.removeOverlay(manualCircles[idx]);
+
+
+
+                }
+
+
+
+                manualMarkers.splice(idx, 1);
+
+
+
+                manualCircles.splice(idx, 1);
+
+
+
+                updateManualCoverage();
+
+
+
+                document.getElementById('status-manual').textContent = manualMarkers.length;
+
+
+
+            }
+
+
+
+        });
+
+
+
+
+
+
+
+        // 弹出信息
+
+
+
+        const popupContent = `
+
+
+
+            <div class="popup-content">
+
+
+
+                <div class="popup-title">人工选址</div>
+
+
+
+                <div class="popup-row"><span class="popup-label">坐标</span><span class="popup-value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>
+
+
+
+                <div class="popup-row"><span class="popup-label">操作</span><span class="popup-value"><a href="javascript:void(0)" onclick="deleteManualMarker(this)">删除</a></span></div>
+
+
+
+            </div>
+
+
+
+        `;
+
+
+
+
+
+
+
+        const infoWindow = new BMap.InfoWindow(popupContent, {
+
+
+
+            width: 250
+
+
+
+        });
+
+
+
+        marker.openInfoWindow(infoWindow);
+
+
+
+
+
+
+
+        map.addOverlay(marker);
+
+
+
+        manualMarkers.push({ marker, lat, lng, type: 'manual' });
+
+
+
+
+
+
+
+        // 覆盖范围常
+
+
+        const circle = new BMap.Circle(
+
+
+
+            point,
+
+
+
+            currentServiceRadius,
+
+
+
+            {
+
+
+
+                strokeColor: '#ea4335',
+
+
+
+                strokeWeight: 1,
+
+
+
+                fillColor: '#ea4335',
+
+
+
+                fillOpacity: 0.15
+
+
+
+            }
+
+
+
+        );
+
+
+
+        map.addOverlay(circle);
+
+
+
+        manualCircles.push(circle);
+
+
+
+
+
+
+
+        document.getElementById('status-manual').textContent = manualMarkers.length;
+
+
+
+        updateManualCoverage();
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 删除人工选址常
+
+
+function deleteManualMarker(button) {
+
+
+
+    // 实现删除逻编辑
+
+
+
+}
+
+
+
+
+
+
+
+// 开始人工选址
+
+
+
+function startManualLocation() {
+
+
+
+    currentMode = 'add';
+
+
+
+    document.getElementById('mode-start').disabled = true;
+
+
+
+    document.getElementById('mode-save').disabled = false;
+
+
+
+    document.getElementById('manual-location-instruction').textContent = '点击地图添加选址点，右键删除选址点，支持拖拽调整';
+
+
+
+    showToast('进入人工选址模式，点击地图添加选址点');
+
+
+
+}
+
+
+
+
+
+
+
+// 保存人工选址方案
+
+
+
+function saveManualLocation() {
+
+
+
+    currentMode = 'view';
+
+
+
+    document.getElementById('mode-start').disabled = false;
+
+
+
+    document.getElementById('mode-save').disabled = true;
+
+
+
+    document.getElementById('manual-location-instruction').textContent = '点击"开始人工选址"按钮后，鼠标左键添加选址，右键删除选址，支持拖拽调整';
+
+
+
+    showToast('人工选址方案已保存');
+
+
+
+    updateSchemeStatusDisplay();
+
+
+
+}
+
+
+
+
+
+
+
+// 清空人工选址
+
+
+
+function clearManualLocations() {
+
+
+
+    manualMarkers.forEach(item => map.removeOverlay(item.marker));
+
+
+
+    manualCircles.forEach(circle => map.removeOverlay(circle));
+
+
+
+    manualMarkers = [];
+
+
+
+    manualCircles = [];
+
+
+
+    manualLocationMetrics = null;
+
+
+
+    document.getElementById('status-manual').textContent = '0';
+
+
+
+    document.getElementById('manual-coverage').textContent = '0%';
+
+
+
+    document.getElementById('manual-coverage-bar').style.width = '0%';
+
+
+
+    updateSchemeStatusDisplay();
+
+
+
+    showToast('人工选址点已清空');
+
+
+
+}
+
+
+
+
+
+
+
+// 运行智能选址
+
+
+
+function runSmartLocation() {
+
+
+
+    showProgress('正在运行智能选址算法...');
+
+
+
+
+
+
+
+    const count = parseInt(document.getElementById('smart-count').value) || 10;
+
+
+
+    const objCoverage = document.getElementById('obj-coverage').checked;
+
+
+
+    const objDistance = document.getElementById('obj-distance').checked;
+
+
+
+    const objBalance = document.getElementById('obj-balance').checked;
+
+
+
+
+
+
+
+    // 模拟API氃用
+
+
+
+    setTimeout(() => {
+
+
+
+        const result = generateMockLocations(count, objCoverage, objDistance, objBalance);
+
+
+
+        renderSmartLocations(result);
+
+
+
+        hideProgress();
+
+
+
+        showToast('智能选址完成，共生成 ' + result.features.length + ' 个选址常');
+
+
+
+    }, 1000);
+
+
+
+}
+
+
+
+
+
+
+
+// 生成模拟选址数据
+
+
+
+function generateMockLocations(num, objCoverage, objDistance, objBalance) {
+
+
+
+    // 使用预殾的候选点（基于信息学部真常POI 位置，转换为BD09格式）
+
+
+
+    const candidates = [
+
+
+
+        // 校园北部（高纬度）
+
+
+
+        { lat: 30.5365, lng: 114.3658, name: "北区宿舍1", capacity: 30, service_pop: 320 },
+
+
+
+        { lat: 30.5362, lng: 114.3645, name: "北区宿舍2", capacity: 25, service_pop: 260 },
+
+
+
+        { lat: 30.5368, lng: 114.3670, name: "北部教学楼", capacity: 28, service_pop: 300 },
+
+
+
+        { lat: 30.5363, lng: 114.3662, name: "北部食堂", capacity: 22, service_pop: 200 },
+
+
+
+        { lat: 30.5359, lng: 114.3655, name: "图书馆北侧", capacity: 20, service_pop: 180 },
+
+
+
+        // 校园中部
+
+
+
+        { lat: 30.5355, lng: 114.3658, name: "中部宿舍", capacity: 26, service_pop: 280 },
+
+
+
+        { lat: 30.5352, lng: 114.3642, name: "中部食堂", capacity: 20, service_pop: 190 },
+
+
+
+        { lat: 30.5348, lng: 114.3665, name: "教学楼中心", capacity: 25, service_pop: 220 },
+
+
+
+        { lat: 30.5345, lng: 114.3638, name: "中部活动区", capacity: 22, service_pop: 200 },
+
+
+
+        // 校园南部（低纬度）
+
+
+
+        { lat: 30.5341, lng: 114.3668, name: "图书馆前", capacity: 28, service_pop: 310 },
+
+
+
+        { lat: 30.5339, lng: 114.3658, name: "3/4宿舍之常", capacity: 24, service_pop: 240 },
+
+
+
+        { lat: 30.5336, lng: 114.3648, name: "一食堂", capacity: 22, service_pop: 210 },
+
+
+
+        { lat: 30.5332, lng: 114.3661, name: "信息学部中心", capacity: 25, service_pop: 250 },
+
+
+
+        { lat: 30.5331, lng: 114.3654, name: "6宿舍旁", capacity: 23, service_pop: 230 },
+
+
+
+        { lat: 30.5328, lng: 114.3651, name: "学生活动中心", capacity: 21, service_pop: 210 },
+
+
+
+        { lat: 30.5325, lng: 114.3648, name: "三四食堂入口", capacity: 27, service_pop: 290 },
+
+
+
+        { lat: 30.5322, lng: 114.3642, name: "体育馆", capacity: 24, service_pop: 220 },
+
+
+
+        { lat: 30.5319, lng: 114.3665, name: "教学楼群", capacity: 20, service_pop: 180 },
+
+
+
+        { lat: 30.5317, lng: 114.3660, name: "1号教学楼入口", capacity: 22, service_pop: 200 },
+
+
+
+        { lat: 30.5313, lng: 114.3679, name: "2号教学楼南侧", capacity: 20, service_pop: 180 },
+
+
+
+        { lat: 30.5312, lng: 114.3658, name: "5号教学楼", capacity: 20, service_pop: 190 },
+
+
+
+        { lat: 30.5305, lng: 114.3668, name: "南门附近", capacity: 25, service_pop: 220 },
+
+
+
+        { lat: 30.5302, lng: 114.3655, name: "南部停车场", capacity: 22, service_pop: 200 },
+
+
+
+        { lat: 30.5299, lng: 114.3670, name: "南门停车场", capacity: 28, service_pop: 310 },
+
+
+
+        { lat: 30.5295, lng: 114.3645, name: "网安学院", capacity: 22, service_pop: 200 },
+
+
+
+        { lat: 30.5338, lng: 114.3637, name: "15/16宿舍旁", capacity: 28, service_pop: 310 },
+
+
+
+        { lat: 30.5357, lng: 114.3662, name: "星园食堂", capacity: 22, service_pop: 210 },
+
+
+
+        { lat: 30.5341, lng: 114.3652, name: "研究生宿舍", capacity: 27, service_pop: 290 },
+
+
+
+        { lat: 30.5335, lng: 114.3675, name: "实验室区", capacity: 20, service_pop: 180 }
+
+
+
+    ];
+
+
+
+
+
+
+
+    // 濇滤出在边界内的候选点
+
+    let validCandidates = candidates.filter(c => isInsideBoundary(c.lat, c.lng));
+
+
+
+    console.log('边界内的候选点数量:', validCandidates.length);
+
+
+
+    
+
+
+
+    if (validCandidates.length === 0) {
+
+        console.warn('没有候选点在边界内，使用全部候选点');
+
+        validCandidates = candidates;
+
+    }
+
+
+
+    // 定义功能区中心坐标（与calculateCoreMetrics保持一致）
+
+
+
+    const zones = {
+
+
+
+        'north_dorm1': [114.3658, 30.5365],   // 北部宿舍区1 BD09 [lng, lat]
+
+
+
+        'north_dorm2': [114.3645, 30.5362],   // 北部宿舍区2 BD09 [lng, lat]
+
+
+
+        'north_teaching': [114.3670, 30.5368], // 北部教学楼 BD09 [lng, lat]
+
+
+
+        'north_canteen': [114.3662, 30.5363], // 北部食堂 BD09 [lng, lat]
+
+
+
+        'library_north': [114.3655, 30.5359], // 图书馆北侧 BD09 [lng, lat]
+
+
+
+        'center_dorm': [114.3658, 30.5355],    // 中部宿舍 BD09 [lng, lat]
+
+
+
+        'center_canteen': [114.3642, 30.5352], // 中部食堂 BD09 [lng, lat]
+
+
+
+        'teaching_center': [114.3665, 30.5348], // 教学楼中心 BD09 [lng, lat]
+
+
+
+        'center_activity': [114.3638, 30.5345], // 中部活动区 BD09 [lng, lat]
+
+
+
+        'library': [114.3668, 30.5341],        // 图书馆前 BD09 [lng, lat]
+
+
+
+        'dorm_34': [114.3658, 30.5339],        // 3/4宿舍 BD09 [lng, lat]
+
+
+
+        'canteen1': [114.3648, 30.5336],       // 一食堂 BD09 [lng, lat]
+
+
+
+        'info_center': [114.3661, 30.5332],     // 信息学部中心 BD09 [lng, lat]
+
+
+
+        'dorm6': [114.3654, 30.5331],           // 6宿舍旁 BD09 [lng, lat]
+
+
+
+        'activity_center': [114.3651, 30.5328], // 学生活动中心 BD09 [lng, lat]
+
+
+
+        'canteen_34': [114.3648, 30.5325],      // 三四食堂入口 BD09 [lng, lat]
+
+
+
+        'gym': [114.3642, 30.5322],             // 体育馆 BD09 [lng, lat]
+
+
+
+        'teaching_group': [114.3665, 30.5319], // 教学楼群 BD09 [lng, lat]
+
+
+
+        'teaching1': [114.3660, 30.5317],       // 1号教学楼入口 BD09 [lng, lat]
+
+
+
+        'teaching2_south': [114.3679, 30.5313], // 2号教学楼南侧 BD09 [lng, lat]
+
+
+
+        'teaching5': [114.3658, 30.5312],       // 5号教学楼 BD09 [lng, lat],
+
+
+
+        'south_gate_near': [114.3668, 30.5305],  // 南门附近 BD09 [lng, lat]
+
+
+
+        'south_parking': [114.3655, 30.5302],   // 南部停车场 BD09 [lng, lat]
+
+
+
+        'south_gate': [114.3670, 30.5299],      // 南门停车场 BD09 [lng, lat]
+
+
+
+        'cyber_security': [114.3645, 30.5295],  // 网安学院 BD09 [lng, lat]
+
+
+
+        'dorm_1516': [114.3637, 30.5338],      // 15/16宿舍旁 BD09 [lng, lat]
+
+
+
+        'xingyuan': [114.3662, 30.5357],       // 星园食堂 BD09 [lng, lat]
+
+
+
+        'grad_dorm': [114.3652, 30.5341],      // 研究生宿舍 BD09 [lng, lat],
+
+
+
+        'lab_area': [114.3675, 30.5335]         // 实验室区 BD09 [lng, lat]
+
+
+
+    };
+
+
+
+    // 生成需求点
+
+    const demandPoints = [];
+
+    for (const [zoneName, zoneCoords] of Object.entries(zones)) {
+
+        demandPoints.push({
+
+            lat: zoneCoords[1],  // [lng, lat] 格式，所常lat 是第二个
+
+            lng: zoneCoords[0],  // [lng, lat] 格式，所常lng 是第一致
+
+            zoneName: zoneName
+
+        });
+
+    }
+
+
+
+    // 计算每个候选点在当前服务半径下的覆盖范围
+
+
+
+    validCandidates = validCandidates.map(candidate => {
+
+        let coveredDemandPoints = 0;
+
+        let totalDistance = 0;
+
+        demandPoints.forEach(demand => {
+
+            const distance = Math.sqrt(
+
+                Math.pow(demand.lng - candidate.lng, 2) + 
+
+                Math.pow(demand.lat - candidate.lat, 2)
+
+            ) * 111319; // 转换为米
+
+
+
+            if (distance <= currentServiceRadius) {
+
+                coveredDemandPoints++;
+
+                totalDistance += distance;
+
+            }
+
+        });
+
+
+
+        // 计算覆盖效率和平均距离
+
+        const coverageEfficiency = coveredDemandPoints / demandPoints.length;
+
+        const avgDistance = coveredDemandPoints > 0 ? totalDistance / coveredDemandPoints : Infinity;
+
+        // 加入服务半径因素，使服务半径变化时结果更明显
+
+        const radiusFactor = currentServiceRadius / 100; // 服务半径越大，权重越高
+
+
+
+        return {
+
+            ...candidate,
+
+            coverageEfficiency,
+
+            avgDistance,
+
+            radiusFactor
+
+        };
+
+    });
+
+
+
+    // 根据优化目标排序候选点，使用确定性规则（同参数重复运行结果一致）
+
+    const stableSortByScore = (scoreFn) => {
+
+        validCandidates.sort((a, b) => {
+
+            const scoreA = scoreFn(a);
+
+            const scoreB = scoreFn(b);
+
+            const scoreDiff = scoreB - scoreA;
+
+            if (Math.abs(scoreDiff) > 1e-9) {
+
+                return scoreDiff;
+
+            }
+
+            // 同分时使用稳定的字段做打破平局，避免每次重算结果漂移
+
+            const nameDiff = String(a.name || '').localeCompare(String(b.name || ''));
+
+            if (nameDiff !== 0) {
+
+                return nameDiff;
+
+            }
+
+            if (a.lng !== b.lng) {
+
+                return a.lng - b.lng;
+
+            }
+
+            return a.lat - b.lat;
+
+        });
+
+    };
+
+
+
+    if (objCoverage && objDistance && objBalance) {
+
+        stableSortByScore((c) => c.coverageEfficiency * 0.4 + (1 / c.avgDistance) * 0.2 + c.capacity * 0.1 + c.radiusFactor * 0.3);
+
+    } else if (objCoverage && objDistance) {
+
+        stableSortByScore((c) => c.coverageEfficiency * 0.5 + (1 / c.avgDistance) * 0.2 + c.radiusFactor * 0.3);
+
+    } else if (objCoverage && objBalance) {
+
+        stableSortByScore((c) => c.coverageEfficiency * 0.6 + c.capacity * 0.1 + c.radiusFactor * 0.3);
+
+    } else if (objDistance && objBalance) {
+
+        stableSortByScore((c) => (1 / c.avgDistance) * 0.5 + c.capacity * 0.2 + c.radiusFactor * 0.3);
+
+    } else if (objCoverage) {
+
+        stableSortByScore((c) => c.coverageEfficiency * 0.7 + c.radiusFactor * 0.3);
+
+    } else if (objDistance) {
+
+        stableSortByScore((c) => (1 / c.avgDistance) * 0.7 + c.radiusFactor * 0.3);
+
+    } else if (objBalance) {
+
+        stableSortByScore((c) => c.capacity * 0.7 + c.radiusFactor * 0.3);
+
+    } else {
+
+        stableSortByScore((c) => c.coverageEfficiency * 0.7 + c.radiusFactor * 0.3);
+
+    }
+
+
+
+
+
+
+
+    // 选择前num个点
+
+
+
+    const selected = validCandidates.slice(0, num);
+
+
+
+
+
+
+
+    // 生成模拟的指标数常
+
+
+    let coverage = 0.5 + num * 0.04;
+
+
+
+    let avgDistance = 200 - num * 10;
+
+
+
+
+
+
+
+    // 确保值在合理范围常
+
+
+    coverage = Math.min(0.95, coverage);
+
+
+
+    avgDistance = Math.max(50, avgDistance);
+
+
+
+
+
+
+
+    return {
+
+
+
+        type: "FeatureCollection",
+
+
+
+        features: selected.map((c, i) => ({
+
+
+
+            type: "Feature",
+
+
+
+            geometry: { type: "Point", coordinates: [c.lng, c.lat] },
+
+
+
+            properties: {
+
+
+
+                id: "P" + (i + 1),
+
+
+
+                name: c.name,
+
+
+
+                capacity: c.capacity,
+
+
+
+                service_pop: c.service_pop
+
+
+
+            }
+
+
+
+        })),
+
+
+
+        metadata: {
+
+
+
+            coverage: coverage,
+
+
+
+            avg_distance: avgDistance,
+
+
+
+            num_locations: selected.length
+
+
+
+        }
+
+
+
+    };
+
+
+
+}
+
+
+
+
+
+
+
+// 渲染智能选址结果
+
+
+
+function renderSmartLocations(geoJson) {
+
+
+
+    // 清除旧的智能选址点和覆盖范围
+
+
+
+    smartMarkers.forEach(item => map.removeOverlay(item.marker));
+
+
+
+    smartCircles.forEach(circle => map.removeOverlay(circle));
+
+
+
+    smartMarkers = [];
+
+
+
+    smartCircles = [];
+
+
+
+
+
+
+
+    // 存储最新的智能选址结果
+
+
+
+    latestSmartLocationResult = geoJson;
+
+
+
+
+
+
+
+    // 保存后端返回的指标数常
+
+
+    if (geoJson.metadata) {
+
+
+
+        smartMetrics = {
+
+
+
+            coverage: geoJson.metadata.coverage || 0,
+
+
+
+            avg_distance: geoJson.metadata.avg_distance || 0,
+
+
+
+            balance: geoJson.metadata.balance || 0,
+
+
+
+            capacity: geoJson.metadata.K ? geoJson.metadata.K * 20 : 0
+
+
+
+        };
+
+
+
+    }
+
+
+
+
+
+
+
+    geoJson.features.forEach((feature, idx) => {
+
+
+
+        if (!feature.geometry || !feature.geometry.coordinates) return;
+
+
+
+        const [lng, lat] = feature.geometry.coordinates;
+
+
+
+        const props = feature.properties || {};
+
+
+
+
+
+
+
+        // 检查点是否在边界内
+
+
+
+        if (!isInsideBoundary(lat, lng)) {
+
+
+
+            console.warn('智能选址点不在边界内:', { lat, lng });
+
+
+
+            return; // 淳濇不在边界内的常
+
+
+        }
+
+
+
+
+
+
+
+        // 直接使用 BD09 坐标，不需要转换
+
+
+        const point = new BMap.Point(lng, lat);
+
+
+
+
+
+
+
+        // 使用 BMap.Symbol 创建三角形标记（蓝色）
+
+
+        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+
+
+
+            scale: 0.8,
+
+
+
+            strokeWeight: 1,
+
+
+
+            strokeColor: '#1a73e8',
+
+
+
+            fillColor: '#1a73e8',
+
+
+
+            fillOpacity: 0.9
+
+
+
+        });
+
+
+
+
+
+
+
+        const marker = new BMap.Marker(point, { icon, enableDragging: false });
+
+
+
+
+
+
+
+        // 弹出信息
+
+
+
+        const pointIndex = idx + 1;
+
+
+
+        const popupContent = `
+
+
+
+            <div class="popup-content">
+
+
+
+                <div class="popup-title">智能选址点${pointIndex}</div>
+
+
+
+                <div class="popup-row"><span class="popup-label">名称</span><span class="popup-value">智能选址点${pointIndex}</span></div>
+
+
+
+                <div class="popup-row"><span class="popup-label">容量</span><span class="popup-value">40 车位</span></div>
+
+
+
+                <div class="popup-row"><span class="popup-label">坐标</span><span class="popup-value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>
+
+
+
+            </div>
+
+
+
+        `;
+
+
+
+
+
+
+
+        const infoWindow = new BMap.InfoWindow(popupContent, {
+
+
+
+            width: 250
+
+
+
+        });
+
+
+
+        marker.addEventListener('click', function() {
+
+
+
+            this.openInfoWindow(infoWindow);
+
+
+
+        });
+
+
+
+
+
+
+
+        map.addOverlay(marker);
+
+
+
+        smartMarkers.push({ marker, lat, lng, data: props, type: 'smart' });
+
+
+
+
+
+
+
+        // 覆盖范围常
+
+
+        const circle = new BMap.Circle(
+
+
+
+            point,
+
+
+
+            currentServiceRadius,
+
+
+
+            {
+
+
+
+                strokeColor: '#1a73e8',
+
+
+
+                strokeWeight: 1,
+
+
+
+                fillColor: '#1a73e8',
+
+
+
+                fillOpacity: 0.15
+
+
+
+            }
+
+
+
+        );
+
+
+
+        map.addOverlay(circle);
+
+
+
+        smartCircles.push(circle);
+
+
+
+    });
+
+
+
+
+
+
+
+    document.getElementById('status-smart').textContent = smartMarkers.length;
+
+
+
+    // 计算核心指标
+    const smartPoints = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+    const calculatedMetrics = calculateCoreMetrics(smartPoints);
+    smartMetrics = calculatedMetrics;
+
+
+
+    updateSmartCoverage();
+
+
+
+    updateCoreMetrics();
+
+
+
+    updateSchemeStatusDisplay();
+
+
+
+}
+
+
+
+
+
+
+
+// 清除智能选址
+function clearSmartLocations() {
+    smartMarkers.forEach(item => map.removeOverlay(item.marker));
+    smartCircles.forEach(circle => map.removeOverlay(circle));
+    smartMarkers = [];
+    smartCircles = [];
+    document.getElementById('status-smart').textContent = '0';
+    document.getElementById('smart-coverage').textContent = '0%';
+    document.getElementById('smart-coverage-bar').style.width = '0%';
+    updateSchemeStatusDisplay();
+    showToast('智能选址点已清空');
+}
+
+// 更新服务半径显示
+function updateRadiusValue() {
+    const radius = document.getElementById('service-radius').value;
+    document.getElementById('radius-value').textContent = radius;
+    currentServiceRadius = parseInt(radius);
+
+    // 更新已有的覆盖范围圆圈
+    updateCoverageCircles();
+}
+
+// 更新覆盖范围圆圈
+function updateCoverageCircles() {
+    // 更新智能选址的覆盖范围
+    smartCircles.forEach((circle, idx) => {
+        if (smartMarkers[idx] && smartMarkers[idx].marker) {
+            const pos = smartMarkers[idx].marker.getPosition();
+            map.removeOverlay(circle);
+            const newCircle = new BMap.Circle(
+                pos,
+                currentServiceRadius,
+                {
+                    strokeColor: '#1a73e8',
+                    strokeWeight: 1,
+                    fillColor: '#1a73e8',
+                    fillOpacity: 0.15
+                }
+            );
+            map.addOverlay(newCircle);
+            smartCircles[idx] = newCircle;
+        }
+    });
+
+    // 更新人工选址的覆盖范围
+    manualCircles.forEach((circle, idx) => {
+        if (manualMarkers[idx] && manualMarkers[idx].marker) {
+            const pos = manualMarkers[idx].marker.getPosition();
+            map.removeOverlay(circle);
+            const newCircle = new BMap.Circle(
+                pos,
+                currentServiceRadius,
+                {
+                    strokeColor: '#ea4335',
+                    strokeWeight: 1,
+                    fillColor: '#ea4335',
+                    fillOpacity: 0.15
+                }
+            );
+            map.addOverlay(newCircle);
+            manualCircles[idx] = newCircle;
+        }
+    });
+}
+
+
+
+
+
+
+
+// 复制智能方案到人常
+
+
+function copySmartToManual() {
+
+
+
+    if (smartMarkers.length === 0) {
+
+
+
+        showToast('请先运行智能选址算法');
+
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+
+    clearManualLocations();
+
+
+
+    smartMarkers.forEach((smart, idx) => {
+
+
+
+        const lat = smart.lat;
+
+
+
+        const lng = smart.lng;
+
+
+
+
+
+
+
+        // 直接使用BD09坐标，不需要转换
+
+
+
+        const point = new BMap.Point(lng, lat);
+
+
+
+
+
+
+
+        // 使用 BMap.Symbol 创建三三角形标记（红扲常
+
+
+        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+
+
+
+            scale: 0.8,
+
+
+
+            strokeWeight: 1,
+
+
+
+            strokeColor: '#ea4335',
+
+
+
+            fillColor: '#ea4335',
+
+
+
+            fillOpacity: 0.9
+
+
+
+        });
+
+
+
+
+
+
+
+        const marker = new BMap.Marker(point, { icon, enableDragging: true });
+
+
+
+
+
+
+
+        // 拽结束事件
+
+
+
+        marker.addEventListener('dragend', function(e) {
+
+
+
+            const newPoint = e.point;
+
+
+
+            const idx = manualMarkers.findIndex(m => m.marker === this);
+
+
+
+            if (idx >= 0) {
+
+
+
+                manualMarkers[idx].lat = newPoint.lat;
+
+
+
+                manualMarkers[idx].lng = newPoint.lng;
+
+
+
+                // 更新覆盖范围常
+
+
+                if (manualCircles[idx]) {
+
+
+
+                    map.removeOverlay(manualCircles[idx]);
+
+
+
+                    manualCircles[idx] = new BMap.Circle(
+
+
+
+                        new BMap.Point(newPoint.lng, newPoint.lat),
+
+
+
+                        currentServiceRadius,
+
+
+
+                        {
+
+
+
+                            strokeColor: '#ea4335',
+
+
+
+                            strokeWeight: 1,
+
+
+
+                            fillColor: '#ea4335',
+
+
+
+                            fillOpacity: 0.15
+
+
+
+                        }
+
+
+
+                    );
+
+
+
+                    map.addOverlay(manualCircles[idx]);
+
+
+
+                }
+
+
+
+                // 重新计算指标
+
+
+
+                const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+
+
+
+                manualLocationMetrics = calculateCoreMetrics(points);
+
+
+
+                updateCoreMetrics();
+
+
+
+                updateManualCoverage();
+
+
+
+            }
+
+
+
+        });
+
+
+
+
+
+
+
+        // 右键删除
+
+
+
+        marker.addEventListener('rightclick', function(e) {
+
+
+
+            // 只有在人工选址模式下才允殸删除
+
+
+
+            if (currentMode !== 'add') {
+
+
+
+                showToast('请先进入人工选址模式再删除选址常');
+
+
+
+                return;
+
+
+
+            }
+
+
+
+            const idx = manualMarkers.findIndex(m => m.marker === this);
+
+
+
+            if (idx >= 0) {
+
+
+
+                map.removeOverlay(this);
+
+
+
+                if (manualCircles[idx]) {
+
+
+
+                    map.removeOverlay(manualCircles[idx]);
+
+
+
+                }
+
+
+
+                manualMarkers.splice(idx, 1);
+
+
+
+                manualCircles.splice(idx, 1);
+
+
+
+                updateManualCoverage();
+
+
+
+                document.getElementById('status-manual').textContent = manualMarkers.length;
+
+
+
+            }
+
+
+
+        });
+
+
+
+
+
+
+
+        // 弹出信息
+
+
+
+        const deleteButton = currentMode === 'add' ? `<a href="javascript:void(0)" onclick="deleteManualMarker(this)">删除</a>` : '';
+
+
+
+        const popupContent = `
+
+
+
+            <div class="popup-content">
+
+
+
+                <div class="popup-title">人工选址</div>
+
+
+
+                <div class="popup-row"><span class="popup-label">坐标</span><span class="popup-value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>
+
+
+
+                ${currentMode === 'add' ? `<div class="popup-row"><span class="popup-label">操作</span><span class="popup-value">${deleteButton}</span></div>` : ''}
+
+
+
+            </div>
+
+
+
+        `;
+
+
+
+
+
+
+
+        const infoWindow = new BMap.InfoWindow(popupContent, {
+
+
+
+            width: 250
+
+
+
+        });
+
+
+
+        marker.openInfoWindow(infoWindow);
+
+
+
+
+
+
+
+        map.addOverlay(marker);
+
+
+
+        manualMarkers.push({ marker, lat, lng, type: 'manual' });
+
+
+
+
+
+
+
+        // 覆盖范围常
+
+
+        const circle = new BMap.Circle(
+
+
+
+            point,
+
+
+
+            currentServiceRadius,
+
+
+
+            {
+
+
+
+                strokeColor: '#ea4335',
+
+
+
+                strokeWeight: 1,
+
+
+
+                fillColor: '#ea4335',
+
+
+
+                fillOpacity: 0.15
+
+
+
+            }
+
+
+
+        );
+
+
+
+        map.addOverlay(circle);
+
+
+
+        manualCircles.push(circle);
+
+
+
+    });
+
+
+
+
+
+
+
+    document.getElementById('status-manual').textContent = manualMarkers.length;
+
+
+
+    
+
+
+
+    // 保存人工方案的真实指标数常
+
+
+    const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+
+
+
+    manualLocationMetrics = calculateCoreMetrics(points);
+
+
+
+    
+
+
+
+    // 强制切换到人工方案显示
+
+
+    selectedScheme = 'manual';
+
+
+
+    document.getElementById('selected-scheme').value = 'manual';
+
+
+
+
+
+
+
+    updateManualCoverage();
+
+
+
+    updateCoreMetrics();
+
+
+
+    updateUsageChart();
+
+
+
+    loadDemandPrediction();
+
+
+
+    updateSchemeStatusDisplay();
+
+
+
+    showToast('智能选址方案已复制到人工方案');
+
+
+
+}
+
+
+
+
+
+
+
+// 更新智能选址覆盖常
+
+
+function updateSmartCoverage() {
+
+
+
+    if (smartMarkers.length === 0) {
+
+
+
+        document.getElementById('smart-coverage').textContent = '0%';
+
+
+
+        document.getElementById('smart-coverage-bar').style.width = '0%';
+
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+
+    const points = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+
+
+
+    const metrics = calculateCoreMetrics(points);
+
+
+
+    const coverage = metrics.coverage * 100;
+
+
+
+    document.getElementById('smart-coverage').textContent = coverage.toFixed(1) + '%';
+
+
+
+    document.getElementById('smart-coverage-bar').style.width = coverage + '%';
+
+
+
+}
+
+
+
+
+
+
+
+// 更新人工选址覆盖常
+
+
+function updateManualCoverage() {
+
+
+
+    if (manualMarkers.length === 0) {
+
+
+
+        document.getElementById('manual-coverage').textContent = '0%';
+
+
+
+        document.getElementById('manual-coverage-bar').style.width = '0%';
+
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+
+    const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+
+
+
+    const metrics = calculateCoreMetrics(points);
+
+
+
+    const coverage = metrics.coverage * 100;
+
+
+
+    document.getElementById('manual-coverage').textContent = coverage.toFixed(1) + '%';
+
+
+
+    document.getElementById('manual-coverage-bar').style.width = coverage + '%';
+
+
+
+}
+
+
+
+
+function getActiveSupplyTimeSlot() {
+    const activeTab = document.querySelector('.tabs .tab.active');
+    if (!activeTab) {
+        return 'morning';
+    }
+
+    const onclick = activeTab.getAttribute('onclick') || '';
+    const match = onclick.match(/'(morning|noon|evening)'/);
+    return match ? match[1] : 'morning';
+}
+
+
+
+
+function getSchemeMetricsByType(type) {
+    if (type === 'smart') {
+        if (smartMarkers.length === 0) {
+            return null;
+        }
+
+        const smartPoints = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        const fallback = calculateCoreMetrics(smartPoints);
+
+        return {
+            coverage: smartMetrics.coverage > 0 ? smartMetrics.coverage : fallback.coverage,
+            avg_distance: smartMetrics.avg_distance > 0 ? smartMetrics.avg_distance : fallback.avg_distance,
+            balance: smartMetrics.balance > 0 ? smartMetrics.balance : fallback.balance,
+            capacity: smartMetrics.capacity > 0 ? smartMetrics.capacity : fallback.capacity
+        };
+    }
+
+    if (type === 'manual') {
+        if (manualMarkers.length === 0) {
+            return null;
+        }
+
+        if (manualLocationMetrics) {
+            return manualLocationMetrics;
+        }
+
+        const manualPoints = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        return calculateCoreMetrics(manualPoints);
+    }
+
+    return null;
+}
+
+
+
+
+function getComparisonAnalysis() {
+    const smart = getSchemeMetricsByType('smart');
+    const manual = getSchemeMetricsByType('manual');
+
+    const smartScore = smart ? calculateSchemeScore(smart) : 0;
+    const manualScore = manual ? calculateSchemeScore(manual) : 0;
+
+    let recommendedScheme = 'none';
+    if (smart && manual) {
+        recommendedScheme = smartScore >= manualScore ? 'smart' : 'manual';
+    } else if (smart) {
+        recommendedScheme = 'smart';
+    } else if (manual) {
+        recommendedScheme = 'manual';
+    }
+
+    return {
+        smartMetrics: smart,
+        manualMetrics: manual,
+        smartScore,
+        manualScore,
+        recommendedScheme
+    };
+}
+
+
+
+
+function getEffectiveScheme() {
+    if (selectedScheme !== 'auto') {
+        return selectedScheme;
+    }
+
+    const analysis = getComparisonAnalysis();
+    if (analysis.recommendedScheme !== 'none') {
+        return analysis.recommendedScheme;
+    }
+
+    if (smartMarkers.length > 0) {
+        return 'smart';
+    }
+
+    if (manualMarkers.length > 0) {
+        return 'manual';
+    }
+
+    return 'smart';
+}
+
+
+
+
+
+
+
+// 生成供需状态桨常
+
+
+function generateSupplyDemandTable(timeSlot) {
+
+
+
+    console.log('generateSupplyDemandTable called with timeSlot:', timeSlot);
+
+
+
+
+
+
+
+    const effectiveScheme = getEffectiveScheme();
+    const markers = effectiveScheme === 'smart' ? smartMarkers : manualMarkers;
+
+
+
+    // 需求模拟规则（早高峰、午高峰、晚高峰）
+    // 早高峰：宿舍 → 教学楼（权重 0.7），宿舍 → 食堂（0.1），宿舍 → 其他（0.2）
+    // 午高峰：教学楼 → 食堂（0.6），教学楼 → 宿舍（0.2），其他 → 食堂（0.2）
+    // 晚高峰：教学楼 → 宿舍（0.7），食堂 → 宿舍（0.2），其他 → 宿舍（0.1）
+    
+    const zoneRules = {
+        'morning': {
+            'dorm_main': 1.0, 'dorm_secondary': 0.8, 'teaching_main': -0.7,
+            'teaching_secondary': -0.5, 'canteen': -0.1, 'library': -0.3, 'other': -0.2
+        },
+        'noon': {
+            'dorm_main': -0.2, 'dorm_secondary': -0.1, 'teaching_main': 0.5,
+            'teaching_secondary': 0.3, 'canteen': -0.6, 'library': 0.2, 'other': -0.2
+        },
+        'evening': {
+            'dorm_main': -0.9, 'dorm_secondary': -0.7, 'teaching_main': 0.6,
+            'teaching_secondary': 0.4, 'canteen': -0.2, 'library': -0.1, 'other': -0.1
+        }
+    };
+
+    // POI类别中心坐标（基于武汉大学信息学部实际POI分布）
+    const zones = {
+        'dorm_main': { coords: [114.3658, 30.5339], category: '宿舍', weight: 1.0 },
+        'dorm_secondary': { coords: [114.3637, 30.5338], category: '宿舍', weight: 0.8 },
+        'dorm_third': { coords: [114.3654, 30.5331], category: '宿舍', weight: 0.7 },
+        'teaching_main': { coords: [114.3660, 30.5317], category: '教学楼', weight: 0.9 },
+        'teaching_secondary': { coords: [114.3679, 30.5313], category: '教学楼', weight: 0.6 },
+        'teaching_third': { coords: [114.3658, 30.5312], category: '教学楼', weight: 0.5 },
+        'canteen_main': { coords: [114.3648, 30.5336], category: '食堂', weight: 0.9 },
+        'canteen_secondary': { coords: [114.3648, 30.5325], category: '食堂', weight: 0.7 },
+        'canteen_third': { coords: [114.3662, 30.5357], category: '食堂', weight: 0.6 },
+        'library': { coords: [114.3668, 30.5341], category: '图书馆', weight: 0.5 },
+        'other': { coords: [114.3665, 30.5320], category: '其他', weight: 0.2 }
+    };
+    
+    const rule = zoneRules[timeSlot] || zoneRules['morning'];
+
+    const tbody = document.getElementById('supply-demand-body');
+
+
+
+    if (!tbody) return;
+
+
+
+
+
+
+
+    if (markers.length === 0) {
+
+
+
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+
+
+
+        return;
+
+
+
+    }
+
+
+
+
+
+
+
+    let tableHTML = '';
+
+
+
+    markers.forEach((item, idx) => {
+
+
+
+        let lat, lng;
+
+
+
+        if (item.marker && typeof item.marker.getPosition === 'function') {
+
+
+
+            const pos = item.marker.getPosition();
+
+
+
+            lat = pos.lat;
+
+
+
+            lng = pos.lng;
+
+
+
+        } else {
+
+
+
+            lat = item.lat;
+
+
+
+            lng = item.lng;
+
+
+
+        }
+
+
+
+
+
+
+
+        let totalWeight = 0;
+        let netFlow = 0;
+
+        for (const [zoneName, zoneData] of Object.entries(zones)) {
+            const [zoneLng, zoneLat] = zoneData.coords;
+            const zoneWeight = zoneData.weight || 1.0;
+            const distance = Math.max(1, Math.hypot(lng - zoneLng, lat - zoneLat) * 111000);
+            const weight = (1.0 / distance) * zoneWeight;
+            totalWeight += weight;
+            netFlow += weight * (rule[zoneName] || 0);
+        }
+
+
+
+        netFlow = totalWeight > 0 ? netFlow / totalWeight : 0;
+
+
+
+
+
+
+
+        const amount = Math.abs(Math.round(netFlow * 100));
+
+
+
+        const type = netFlow > 0 ? 1 : -1;
+
+
+
+        const baseCurrent = 15;
+
+
+
+        const current = Math.floor(baseCurrent + (type * amount * 0.5));
+
+
+
+        const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
+
+
+
+        const currentValue = Math.max(0, Math.min(30, current));
+
+
+
+        const demandValue = Math.max(0, Math.min(30, demand));
+
+
+
+
+
+
+
+        let transfer = 0;
+
+
+
+        if (currentValue > demandValue + 5) {
+
+
+
+            transfer = -Math.floor((currentValue - demandValue) * 0.6);
+
+
+
+        } else if (currentValue < demandValue - 5) {
+
+
+
+            transfer = Math.floor((demandValue - currentValue) * 0.6);
+
+
+
+        }
+
+
+
+
+
+
+
+        const status = transfer > 0 ? '<span style="color:#e74c3c">不足</span>' :
+
+
+
+                      transfer < 0 ? '<span style="color:#27ae60">过剩</span>' :
+
+
+
+                      '<span style="color:#999">平衡</span>';
+
+
+
+        const transferStr = transfer !== 0 ? Math.abs(transfer) + '辆' : '-';
+
+
+
+        // 根据方案类型显示不同的站点名称
+
+
+
+        const zoneName = effectiveScheme === 'smart' ? `智能点${idx + 1}` : `人工点${idx + 1}`;
+
+
+
+
+
+
+
+        tableHTML += `<tr>
+
+
+
+            <td>${zoneName}</td>
+
+
+
+            <td>${currentValue}</td>
+
+
+
+            <td>${demandValue}</td>
+
+
+
+            <td>${status}</td>
+
+
+
+            <td>${transferStr}</td>
+
+
+
+        </tr>`;
+
+
+
+    });
+
+
+
+
+
+
+
+    tbody.innerHTML = tableHTML;
+
+
+
+}
+
+
+
+
+
+
+
+// 切换供需状态表格的时段
+
+
+
+function switchSupplyTab(timeSlot) {
+
+
+
+    const tabs = document.querySelectorAll('.tab');
+
+
+
+    tabs.forEach(tab => {
+
+
+
+        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+
+
+
+        if (tabTime === timeSlot) {
+
+
+
+            tab.classList.add('active');
+
+
+
+        } else {
+
+
+
+            tab.classList.remove('active');
+
+
+
+        }
+
+
+
+    });
+
+
+
+    generateSupplyDemandTable(timeSlot);
+
+
+
+}
+
+
+
+
+
+
+
+// 根据停车点位置计算核心指标
+
+
+function calculateCoreMetrics(parkingPoints) {
+
+
+
+    if (!parkingPoints || parkingPoints.length === 0) {
+
+
+
+        return {
+
+
+
+            coverage: 0,
+
+
+
+            avg_distance: 0,
+
+
+
+            balance: 0,
+
+
+
+            capacity: 0
+
+
+
+        };
+
+
+
+    }
+
+
+
+
+
+
+
+    // 定义功能区中心坐标（BD09格式 ，与 generateSupplyDemandTable 保持一致
+
+
+    const zones = {
+
+
+
+        'dorm': [114.3652, 30.5357],      // 宿舍区核心BD09 [lng, lat]
+
+
+
+        'teaching': [114.3663, 30.5335],  // 教学区核心BD09 [lng, lat]
+
+
+
+        'canteen': [114.3645, 30.5353],   // 食堂 BD09 [lng, lat]
+
+
+
+        'library': [114.3662, 30.5361],   // 图书常BD09 [lng, lat]
+
+
+
+        'south_gate': [114.3664, 30.5317], // 南门附濑 BD09 [lng, lat]
+
+
+
+        'playground': [114.3636, 30.5342], // 操场 BD09 [lng, lat]
+
+
+
+        'info_south': [114.3656, 30.5321], // 信息学部南区 BD09 [lng, lat]
+
+
+
+        'info_west': [114.3675, 30.5316],  // 信息学部楿区 BD09 [lng, lat]
+
+
+
+        'info_east': [114.3641, 30.5327]   // 信息学部东区 BD09 [lng, lat]
+
+
+
+    };
+
+
+
+
+
+
+
+    // 使用功能区中心作为需求点（与 generateSupplyDemandTable 一致）
+
+
+
+    const demandPoints = [];
+
+
+
+    for (const [zoneName, zoneCoords] of Object.entries(zones)) {
+
+
+
+        demandPoints.push({
+
+
+
+            lat: zoneCoords[1],  // [lng, lat] 格式，所常lat 是第二个
+
+
+
+            lng: zoneCoords[0],  // [lng, lat] 格式，所常lng 是第一致
+
+
+            zoneName: zoneName
+
+
+
+        });
+
+
+
+    }
+
+
+
+
+
+
+
+    // 计算每个需求点到最近停车点的直线距离（与后端保持一致）
+
+
+
+    const distances = [];
+
+
+
+    const serviceRadius = currentServiceRadius;
+
+
+
+    let coveredCount = 0;
+
+
+
+    const serviceCounts = new Array(parkingPoints.length).fill(0);
+
+
+
+
+
+
+
+    demandPoints.forEach(demand => {
+
+
+
+        let minDistance = Infinity;
+
+
+
+        let nearestParkingIndex = -1;
+
+
+
+
+
+
+
+        parkingPoints.forEach((parking, index) => {
+
+
+
+            const distance = Math.sqrt(
+
+
+
+                Math.pow(demand.lng - parking.lng, 2) + 
+
+
+
+                Math.pow(demand.lat - parking.lat, 2)
+
+
+
+            ) * 111319; // 转换为米
+
+
+
+
+
+
+
+            if (distance < minDistance) {
+
+
+
+                minDistance = distance;
+
+
+
+                nearestParkingIndex = index;
+
+
+
+            }
+
+
+
+        });
+
+
+
+
+
+
+
+        distances.push(minDistance);
+
+
+
+        if (minDistance <= serviceRadius) {
+
+
+
+            coveredCount++;
+
+
+
+            if (nearestParkingIndex >= 0) {
+
+
+
+                serviceCounts[nearestParkingIndex]++;
+
+
+
+            }
+
+
+
+        }
+
+
+
+    });
+
+
+
+
+
+
+
+    // 计算覆盖率（与后端保持一致）
+
+
+
+    const coverage = demandPoints.length > 0 ? coveredCount / demandPoints.length : 0;
+
+
+
+
+
+
+
+    // 计算平均步桌距离（只考虑在服务半径内的需求点）
+
+
+
+    const coveredDistances = distances.filter(d => d <= serviceRadius);
+
+
+
+    const avgDistance = coveredDistances.length > 0 ? coveredDistances.reduce((a, b) => a + b, 0) / coveredDistances.length : 0;
+
+
+
+
+
+
+
+    // 计算均衡性（基于停车点分布的合理性，考虑服务半径）
+
+
+
+    let balanceScore = 0;
+
+
+
+    if (serviceCounts.length === 1) {
+
+
+
+        // 只有一个停车点时，均衡性为 100
+
+
+
+        balanceScore = 100;
+
+
+
+    } else if (serviceCounts.length > 1) {
+
+
+
+        // 1. 计算服务需求的均衡性（使用变异系数，只考虑服务半径内的需求点）
+
+
+
+        const totalCoveredDemand = coveredDistances.length;
+
+
+
+        const avgServiceCount = totalCoveredDemand > 0 ? totalCoveredDemand / serviceCounts.length : 0;
+
+
+
+        const squaredDiffs = serviceCounts.map(count => Math.pow(count - avgServiceCount, 2));
+
+
+
+        const variance = squaredDiffs.reduce((a, b) => a + b, 0) / (serviceCounts.length - 1);
+
+
+
+        const stdServiceCount = Math.sqrt(variance);
+
+
+
+        const coefficientOfVariation = avgServiceCount > 0 ? stdServiceCount / avgServiceCount : 0;
+
+
+
+        
+
+
+
+        // 2. 计算服务需求均衡性得分（变异系数越小，得分越高）
+
+
+
+        const loadBalanceScore = Math.max(70, 100 - (coefficientOfVariation * 50));
+
+
+
+        
+
+
+
+        // 3. 计算空间分布均衡性（使用停车点之间的平均距离）
+
+
+        let spatialBalanceScore = 0;
+
+
+
+        if (parkingPoints.length > 1) {
+
+
+
+            // 计算所有停车点之间的距离
+
+
+            const distances = [];
+
+
+
+            for (let i = 0; i < parkingPoints.length; i++) {
+
+
+
+                for (let j = i + 1; j < parkingPoints.length; j++) {
+
+
+
+                    const distance = Math.sqrt(
+
+
+
+                        Math.pow(parkingPoints[i].lng - parkingPoints[j].lng, 2) + 
+
+
+
+                        Math.pow(parkingPoints[i].lat - parkingPoints[j].lat, 2)
+
+
+
+                    ) * 111319; // 转换为米
+
+
+
+                    distances.push(distance);
+
+
+
+                }
+
+
+
+            }
+
+
+
+            
+
+
+
+            // 计算平均距离
+
+
+
+            if (distances.length > 0) {
+
+
+
+                const avgDistance = distances.reduce((a, b) => a + b, 0) / distances.length;
+
+
+
+                // 理想的平均距离（根据校园大小调整常
+
+
+                const idealDistance = 300; // 理想平均距离常00常
+
+
+                // 计算空间分布均衡性得分（距离越接濑理想值，得分越高常
+
+
+                const distanceDeviation = Math.abs(avgDistance - idealDistance) / idealDistance;
+
+
+
+                spatialBalanceScore = Math.max(70, 100 - (distanceDeviation * 60));
+
+
+
+            }
+
+
+
+        }
+
+
+
+        
+
+
+
+        // 4. 综合均衡性得分
+
+
+
+        // 增加服务需求均衡性的权重，使其随服务半径变化更加明显
+
+
+
+        balanceScore = loadBalanceScore * 0.9 + spatialBalanceScore * 0.1;
+
+
+
+        
+
+
+
+        // 确保得分常-100之间
+
+
+
+        balanceScore = Math.max(0, Math.min(100, balanceScore));
+
+
+
+    }
+
+
+
+
+
+
+
+    // 计算总容量（与后端保持一致）
+
+
+
+    const capacity = parkingPoints.length * 20;
+
+
+
+
+
+
+
+    return {
+
+
+
+        coverage: coverage,
+
+
+
+        avg_distance: avgDistance,
+
+
+
+        balance: balanceScore,
+
+
+
+        capacity: capacity
+
+
+
+    };
+
+
+
+}
+
+
+
+
+
+
+
+// 更新核心指标显示
+
+
+
+function updateCoreMetrics() {
+
+
+
+    const hasSmartPoints = smartMarkers.length > 0;
+    const hasManualPoints = manualMarkers.length > 0;
+
+    if (!hasSmartPoints && !hasManualPoints) {
+
+
+
+        // 没有任何方案，重置指标
+
+
+        document.getElementById('metric-coverage').textContent = '0%';
+
+
+
+        document.getElementById('metric-distance').textContent = '0m';
+
+
+
+        document.getElementById('metric-balance').textContent = '0';
+
+
+
+        document.getElementById('metric-capacity').textContent = '0';
+
+
+
+        generateSupplyDemandTable(getActiveSupplyTimeSlot());
+        return;
+    }
+
+    const effectiveScheme = getEffectiveScheme();
+    const displayMetrics = getSchemeMetricsByType(effectiveScheme);
+
+    if (!displayMetrics) {
+        document.getElementById('metric-coverage').textContent = '0%';
+        document.getElementById('metric-distance').textContent = '0m';
+        document.getElementById('metric-balance').textContent = '0';
+        document.getElementById('metric-capacity').textContent = '0';
+        generateSupplyDemandTable(getActiveSupplyTimeSlot());
+        return;
+    }
+
+    document.getElementById('metric-coverage').textContent = (displayMetrics.coverage * 100).toFixed(1) + '%';
+    document.getElementById('metric-distance').textContent = displayMetrics.avg_distance.toFixed(0) + 'm';
+    document.getElementById('metric-balance').textContent = Math.round(displayMetrics.balance);
+    document.getElementById('metric-capacity').textContent = displayMetrics.capacity;
+
+    generateSupplyDemandTable(getActiveSupplyTimeSlot());
+
+
+
+}
+
+
+
+
+function updateSelectedScheme() {
+    const selector = document.getElementById('selected-scheme');
+    selectedScheme = selector ? selector.value : 'auto';
+
+    updateCoreMetrics();
+    updateSchemeStatusDisplay();
+
+    const analysis = getComparisonAnalysis();
+    if (analysis.smartMetrics && analysis.manualMetrics) {
+        renderComparisonAnalysisPanel();
+    }
+}
+
+
+
+
+
+
+
+// 统一更新“方案状态”显示，避免用户切换“切换时常重新选址常
+
+
+function updateSchemeStatusDisplay() {
+
+
+
+    const smartEl = document.getElementById('scheme-smart-status');
+
+
+
+    const manualEl = document.getElementById('scheme-manual-status');
+
+
+
+    const dispatchEl = document.getElementById('scheme-dispatch-status');
+
+
+
+
+
+
+
+    if (smartEl) {
+
+
+
+        smartEl.textContent = smartMarkers.length > 0
+
+
+
+            ? ('已生成（' + smartMarkers.length + '点）')
+
+
+
+            : '未生成（0点）';
+
+
+
+    }
+
+
+
+
+
+
+
+    if (manualEl) {
+
+
+
+        manualEl.textContent = manualMarkers.length > 0
+
+
+
+            ? ('已编编辑（' + manualMarkers.length + '点）')
+
+
+
+            : '未编编辑（0点）';
+
+
+
+    }
+
+
+
+
+
+
+
+    if (dispatchEl) {
+
+
+
+        dispatchEl.textContent = currentDispatchScheme || '待选择';
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 运行动态氃常
+
+
+function runDispatch() {
+
+
+
+    console.log('=== 运行调度 ===');
+
+
+
+    console.log('smartMarkers数量:', smartMarkers.length);
+
+
+
+    console.log('manualMarkers数量:', manualMarkers.length);
+
+
+
+    
+
+
+
+    const timeSlot = document.getElementById('dispatch-time').value || 'morning';
+
+
+
+    
+
+
+
+    // 检查是否有智能或人工选址常
+
+
+    const hasSmartPoints = smartMarkers.length > 0;
+
+
+
+    const hasManualPoints = manualMarkers.length > 0;
+
+
+
+    
+
+
+
+    console.log('hasSmartPoints:', hasSmartPoints);
+
+
+
+    console.log('hasManualPoints:', hasManualPoints);
+
+
+
+    console.log('当前timeSlot:', timeSlot);
+
+
+
+    
+
+
+
+    if (!hasSmartPoints && !hasManualPoints) {
+
+
+
+        showToast('请先运行智能选址或添加人工选址常');
+
+
+
+        return;
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 选择使用哪种方案
+
+
+
+    if (hasSmartPoints && hasManualPoints) {
+
+
+
+        // 两种方案都存在，根据对比结果选择最优方常
+
+
+        // 计算两种方案的综合得分
+
+
+        const smartScore = calculateSchemeScore(smartMarkers.length);
+
+
+
+        const manualScore = calculateSchemeScore(manualMarkers.length);
+
+
+
+        
+
+
+
+        if (smartScore > manualScore) {
+
+
+
+            selectedScheme = 'smart';
+
+
+
+            currentDispatchScheme = '智能选址（推荐）';
+
+
+
+        } else {
+
+
+
+            selectedScheme = 'manual';
+
+
+
+            currentDispatchScheme = '人工选址（推荐）';
+
+
+
+        }
+
+
+
+        
+
+
+
+        showToast(`基于方案对比分析，选择${selectedScheme === 'smart' ? '智能选址' : '人工选址'}方案濛桌调度优化`);
+
+
+
+    } else if (hasSmartPoints) {
+
+
+
+        // 只有智能选址方案
+
+
+
+        selectedScheme = 'smart';
+
+
+
+        currentDispatchScheme = '智能选址';
+
+
+
+        showToast('使用智能选址方案濛桌调度优化');
+
+
+
+    } else if (hasManualPoints) {
+
+
+
+        // 只有人工选址方案
+
+
+
+        selectedScheme = 'manual';
+
+
+
+        currentDispatchScheme = '人工选址';
+
+
+
+        showToast('使用人工选址方案濛桌调度优化');
+
+
+
+    } else {
+
+
+
+        // 没有任何方案
+
+
+
+        selectedScheme = 'smart';
+
+
+
+        currentDispatchScheme = '待选择';
+
+
+
+        showToast('请先运行智能选址或添加人工选址常');
+
+
+
+        return;
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 更新方案状态显示
+
+
+    updateSchemeStatusDisplay();
+
+
+
+    
+
+
+
+    // 更新停车点供需状态表格，显示当前选择方案的供需状态
+
+
+    // 同时更新标签的激活状常
+
+
+    const tabs = document.querySelectorAll('.tab');
+
+
+
+    tabs.forEach(tab => tab.classList.remove('active'));
+
+
+
+    // 找到对应的标签并激常
+
+
+    tabs.forEach(tab => {
+
+
+
+        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+
+
+
+        if (tabTime === timeSlot) {
+
+
+
+            tab.classList.add('active');
+
+
+
+        }
+
+
+
+    });
+
+
+
+    generateSupplyDemandTable(timeSlot);
+
+
+
+    
+
+
+
+    // 获取当前时段的需求预测数常
+
+
+    let demandData = null;
+
+
+
+    if (savedPredictionData) {
+
+
+
+        const ruleData = savedPredictionData.rulePrediction.predictions.find(p => p.time_slot === timeSlot);
+
+
+
+        if (ruleData) {
+
+
+
+            demandData = ruleData.demand_index;
+
+
+
+        }
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 确保需求数据存在，如果不存在则基于时段生成默认常
+
+
+    if (!demandData) {
+
+
+
+        // 基于时段生成默认需求指标
+
+
+        const baseDemand = {
+
+
+
+            morning: 85,
+
+
+
+            noon: 70,
+
+
+
+            evening: 90
+
+
+
+        }[timeSlot] || 70;
+
+
+
+        demandData = Math.round(baseDemand * 1.1); // 模拟 next1h 预测
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 生成缓存键，基于时段、方案和需求数常
+
+
+    const cacheKey = `${timeSlot}_${selectedScheme}_${demandData}`;
+
+
+
+    
+
+
+
+    showProgress('正在运行动态调度算常..');
+
+
+
+
+
+
+
+    // 收集选中的选址点及其供需状常
+
+
+    let parkingPoints = [];
+
+
+
+    
+
+
+
+    // 功能区中心（与后端一致）- 使用 BD09 坐标
+
+
+
+    const zones = {
+
+
+
+        'dorm': [114.3652, 30.5357],      // 宿舍区核心BD09 [lng, lat]
+
+
+
+        'teaching': [114.3663, 30.5335],  // 教学区核心BD09 [lng, lat]
+
+
+
+        'canteen': [114.3645, 30.5353],   // 食堂 BD09 [lng, lat]
+
+
+
+        'library': [114.3662, 30.5361],   // 图书常BD09 [lng, lat]
+
+
+
+        'south_gate': [114.3664, 30.5317], // 南门附濑 BD09 [lng, lat]
+
+
+
+        'playground': [114.3636, 30.5342], // 操场 BD09 [lng, lat]
+
+
+
+        'info_south': [114.3656, 30.5321], // 信息学部南区 BD09 [lng, lat]
+
+
+
+        'info_west': [114.3675, 30.5316],  // 信息学部楿区 BD09 [lng, lat]
+
+
+
+        'info_east': [114.3641, 30.5327]   // 信息学部东区 BD09 [lng, lat]
+
+
+
+    };
+
+
+
+    
+
+
+
+    // 时段需求规则（与后端一致）
+
+
+
+    const rules = {
+
+
+
+        'morning': {
+
+
+
+            'dorm': 1.0,      // 宿舍区大量供给
+
+
+            'teaching': -0.8, // 教学区需常
+
+
+            'canteen': -0.2,  // 食堂少量需常
+
+
+            'library': -0.3,  // 图书馆少量需常
+
+
+            'south_gate': 0.0, // 校门中常
+
+
+            'playground': -0.1, // 操场少量需常
+
+
+            'info_south': -0.5, // 信息学部南区需常
+
+
+            'info_west': -0.4,  // 信息学部楿区需常
+
+
+            'info_east': -0.3   // 信息学部东区需常
+
+
+        },
+
+
+
+        'noon': {
+
+
+
+            'dorm': -0.3,
+
+
+
+            'teaching': 0.5,
+
+
+
+            'canteen': -0.7,
+
+
+
+            'library': 0.2,
+
+
+
+            'south_gate': 0.0,
+
+
+
+            'playground': 0.1,
+
+
+
+            'info_south': 0.3,
+
+
+
+            'info_west': 0.2,
+
+
+
+            'info_east': 0.1
+
+
+
+        },
+
+
+
+        'evening': {
+
+
+
+            'dorm': -0.9,
+
+
+
+            'teaching': 0.6,
+
+
+
+            'canteen': 0.2,
+
+
+
+            'library': 0.1,
+
+
+
+            'south_gate': 0.0,
+
+
+
+            'playground': 0.3,
+
+
+
+            'info_south': 0.4,
+
+
+
+            'info_west': 0.3,
+
+
+
+            'info_east': 0.2
+
+
+
+        }
+
+
+
+    };
+
+
+
+    
+
+
+
+    const rule = rules[timeSlot] || rules['morning'];
+
+
+
+
+
+
+
+    console.log('=== runDispatch 开常===');
+
+
+
+    console.log('timeSlot:', timeSlot);
+
+
+
+    console.log('selectedScheme:', selectedScheme);
+
+
+
+    console.log('smartMarkers数量:', smartMarkers.length);
+
+
+
+    console.log('manualMarkers数量:', manualMarkers.length);
+
+
+
+    console.log('selectedScheme value:', selectedScheme);
+
+
+
+
+
+
+
+    if (selectedScheme === 'smart') {
+
+
+
+        smartMarkers.forEach((item, index) => {
+
+
+
+            try {
+
+
+
+                let lat, lng;
+
+
+
+                if (item && item.marker && typeof item.marker.getPosition === 'function') {
+
+
+
+                    const pos = item.marker.getPosition();
+
+
+
+                    lat = pos.lat;
+
+
+
+                    lng = pos.lng;
+
+
+
+                } else if (item && item.lat && item.lng) {
+
+
+
+                    // 直接使用存储的坐标（已经是BD09常
+
+
+                    lat = item.lat;
+
+
+
+                    lng = item.lng;
+
+
+
+                } else {
+
+
+
+                    return;
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 计算该点的供需状态（与后端一致）
+
+
+
+                let totalWeight = 0;
+
+
+
+                let netFlow = 0;
+
+
+
+                
+
+
+
+                for (const [zoneName, zoneCenter] of Object.entries(zones)) {
+
+
+
+                    const [zoneLng, zoneLat] = zoneCenter;  // zones 常[lng, lat] 格式
+
+
+
+                    
+
+
+
+                    // 计算距离（米常
+
+
+                    const distance = Math.hypot(lng - zoneLng, lat - zoneLat) * 111000;
+
+
+
+                    if (distance < 1) distance = 1;
+
+
+
+                    
+
+
+
+                    const weight = 1.0 / distance;
+
+
+
+                    totalWeight += weight;
+
+
+
+                    netFlow += weight * (rule[zoneName] || 0);
+
+
+
+                }
+
+
+
+                
+
+
+
+                if (totalWeight > 0) {
+
+
+
+                    netFlow = netFlow / totalWeight; // 加权平均倾向，指标-1..1
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 计算与表格相同的 current 和 demand
+
+
+                const amount = Math.abs(Math.round(netFlow * 100));
+
+
+
+                const type = netFlow > 0 ? 1 : -1;
+
+
+
+                
+
+
+
+                // 生成当前数量和需求数量（与表格一致）
+
+
+
+                const baseCurrent = 15; // 基础数量
+
+
+
+                const current = Math.floor(baseCurrent + (type * amount * 0.5));
+
+
+
+                const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
+
+
+
+                
+
+
+
+                // 确保当前数量和需求在合理范围常
+
+
+                const currentValue = Math.max(0, Math.min(30, current));
+
+
+
+                const demandValue = Math.max(0, Math.min(30, demand));
+
+
+
+                
+
+
+
+                // 计算调拨量（与表格一致）
+
+
+
+                let transfer;
+
+
+
+                if (currentValue > demandValue + 5) {
+
+
+
+                    transfer = -Math.floor((currentValue - demandValue) * 0.6);
+
+
+
+                } else if (currentValue < demandValue - 5) {
+
+
+
+                    transfer = Math.floor((demandValue - currentValue) * 0.6);
+
+
+
+                } else {
+
+
+
+                    transfer = 0;
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 只添加需要调拨的点
+
+
+                console.log(`智能选址点${index}: lat=${lat}, lng=${lng}, netFlow=${netFlow.toFixed(4)}, amount=${amount}, current=${currentValue}, demand=${demandValue}, transfer=${transfer || 'N/A'}`);
+
+
+
+                if (transfer !== 0) {
+
+
+
+                    // 使用与智能选址点相同的名称
+
+
+
+                    const smartPointName = item.data?.name || `P${index + 1}`;
+
+
+
+                    parkingPoints.push({
+
+
+
+                        id: `smart-${item.marker?._leaflet_id || Date.now()}`,
+
+
+
+                        lat: lat,
+
+
+
+                        lng: lng,
+
+
+
+                        type: 'smart',
+
+
+
+                        amount: Math.abs(transfer),
+
+
+
+                        demand_type: transfer > 0 ? 1 : -1, // 正数桨示需求，负数桨示供应
+
+
+
+                        transfer: transfer, // 添加transfer字段，与前端表格一致
+
+
+                        name: smartPointName // 添加name字段，与智能选址点名称一致
+
+
+                    });
+
+
+
+                }
+
+
+
+            } catch (error) {
+
+
+
+                console.warn('Error processing smart marker:', error);
+
+
+
+            }
+
+
+
+        });
+
+
+
+    } else {
+
+
+
+        manualMarkers.forEach((item, index) => {
+
+
+
+            const name = `人工常{index + 1}`;
+
+
+
+            try {
+
+
+
+                let lat, lng;
+
+
+
+                if (item && item.marker && typeof item.marker.getPosition === 'function') {
+
+
+
+                    const pos = item.marker.getPosition();
+
+
+
+                    lat = pos.lat;
+
+
+
+                    lng = pos.lng;
+
+
+
+                } else if (item && item.lat && item.lng) {
+
+
+
+                    // 直接使用存储的坐标（已经是BD09常
+
+
+                    lat = item.lat;
+
+
+
+                    lng = item.lng;
+
+
+
+                } else {
+
+
+
+                    return;
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 计算该点的供需状态（与后端一致）
+
+
+
+                let totalWeight = 0;
+
+
+
+                let netFlow = 0;
+
+
+
+                
+
+
+
+                for (const [zoneName, zoneCenter] of Object.entries(zones)) {
+
+
+
+                    const [zoneLng, zoneLat] = zoneCenter;  // zones 常[lng, lat] 格式
+
+
+
+                    
+
+
+
+                    // 计算距离（米常
+
+
+                    const distance = Math.hypot(lng - zoneLng, lat - zoneLat) * 111000;
+
+
+
+                    if (distance < 1) distance = 1;
+
+
+
+                    
+
+
+
+                    const weight = 1.0 / distance;
+
+
+
+                    totalWeight += weight;
+
+
+
+                    netFlow += weight * (rule[zoneName] || 0);
+
+
+
+                }
+
+
+
+                
+
+
+
+                if (totalWeight > 0) {
+
+
+
+                    netFlow = netFlow / totalWeight; // 加权平均倾向，指标-1..1
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 计算与表格相同的 current 和 demand
+
+
+                const amount = Math.abs(Math.round(netFlow * 100));
+
+
+
+                const type = netFlow > 0 ? 1 : -1;
+
+
+
+                
+
+
+
+                // 生成当前数量和需求数量（与表格一致）
+
+
+
+                const baseCurrent = 15; // 基础数量
+
+
+
+                const current = Math.floor(baseCurrent + (type * amount * 0.5));
+
+
+
+                const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
+
+
+
+                
+
+
+
+                // 确保当前数量和需求在合理范围常
+
+
+                const currentValue = Math.max(0, Math.min(30, current));
+
+
+
+                const demandValue = Math.max(0, Math.min(30, demand));
+
+
+
+                
+
+
+
+                // 计算调拨量（与表格一致）
+
+
+
+                let transfer;
+
+
+
+                if (currentValue > demandValue + 5) {
+
+
+
+                    transfer = -Math.floor((currentValue - demandValue) * 0.6);
+
+
+
+                } else if (currentValue < demandValue - 5) {
+
+
+
+                    transfer = Math.floor((demandValue - currentValue) * 0.6);
+
+
+
+                } else {
+
+
+
+                    transfer = 0;
+
+
+
+                }
+
+
+
+                
+
+
+
+                // 只添加需要调拨的点
+
+
+                if (transfer !== 0) {
+
+
+
+                    parkingPoints.push({
+
+
+
+                        id: `manual-${item.marker?._leaflet_id || Date.now()}`,
+
+
+
+                        lat: lat,
+
+
+
+                        lng: lng,
+
+
+
+                        type: 'manual',
+
+
+
+                        amount: Math.abs(transfer),
+
+
+
+                        demand_type: transfer > 0 ? 1 : -1, // 正数桨示需求，负数桨示供应
+
+
+
+                        transfer: transfer, // 添加transfer字段，与前端表格一致
+
+
+                        name: name // 添加name字段，与人工选址点名称一致
+
+
+                    });
+
+
+
+                }
+
+
+
+            } catch (error) {
+
+
+
+                console.warn('Error processing manual marker:', error);
+
+
+
+            }
+
+
+
+        });
+
+
+
+    }
+
+
+
+    
+
+
+
+    console.log('收集到的停车点', parkingPoints);
+
+
+
+    
+
+
+
+    // 生成调度路线
+
+
+
+    const dispatchResult = generateDispatchRoutes(parkingPoints, timeSlot);
+
+
+
+    
+
+
+
+    // 渲染调度路线
+
+
+
+    renderDispatch(dispatchResult);
+
+
+
+    
+
+
+
+    // 隐藏进度常
+
+
+    hideProgress();
+
+
+
+    
+
+
+
+    showToast('动态调度优化完成，共生常' + (dispatchResult?.features?.length || 0) + ' 条调度淯常');
+
+
+
+}
+
+
+
+
+
+
+
+// 生成调度路线
+
+
+
+function generateDispatchRoutes(parkingPoints, timeSlot) {
+
+
+
+    if (!parkingPoints || parkingPoints.length === 0) {
+
+
+
+        return { type: "FeatureCollection", features: [] };
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 分离供应点和需求点
+
+
+
+    const supplyPoints = parkingPoints.filter(p => p.demand_type === -1); // 供应
+
+
+
+    const demandPoints = parkingPoints.filter(p => p.demand_type === 1);  // 需常
+
+
+
+
+
+
+    console.log('供应点数常', supplyPoints.length, supplyPoints);
+
+
+
+    console.log('需求点数量:', demandPoints.length, demandPoints);
+
+
+
+    
+
+
+
+    // 如果没有供应点，添加一个默认供应点（校园中心点常
+
+
+    if (supplyPoints.length === 0) {
+
+
+
+        console.log('没有供应点，添加默认供应常');
+
+
+
+        supplyPoints.push({
+
+
+
+            lat: 30.5330,
+
+
+
+            lng: 114.3650,
+
+
+
+            name: '默认供应常',
+
+
+
+            demand_type: -1,
+
+
+
+            transfer: -50 // 假殾常0澆可供应
+
+
+
+        });
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 如果没有需求点，添加一个默认需求点
+
+
+
+    if (demandPoints.length === 0) {
+
+
+
+        console.log('没有需求点，添加默认需求点');
+
+
+
+        demandPoints.push({
+
+
+
+            lat: 30.5310,
+
+
+
+            lng: 114.3670,
+
+
+
+            name: '默认需求点',
+
+
+
+            demand_type: 1,
+
+
+
+            transfer: 10 // 假殾常0澆需常
+
+
+        });
+
+
+
+    }
+
+
+
+    
+
+
+
+    const features = [];
+
+
+
+    let routeId = 1;
+
+
+
+    
+
+
+
+    // 简单的匹配算法：为每个需求点找到最近的供应点
+
+
+    demandPoints.forEach(demandPoint => {
+
+
+
+        let closestSupply = null;
+
+
+
+        let minDistance = Infinity;
+
+
+
+        
+
+
+
+        supplyPoints.forEach(supplyPoint => {
+
+
+
+            const distance = Math.hypot(
+
+
+
+                demandPoint.lng - supplyPoint.lng,
+
+
+
+                demandPoint.lat - supplyPoint.lat
+
+
+
+            ) * 111000; // 转换为米
+
+
+
+            
+
+
+
+            if (distance < minDistance) {
+
+
+
+                minDistance = distance;
+
+
+
+                closestSupply = supplyPoint;
+
+
+
+            }
+
+
+
+        });
+
+
+
+        
+
+
+
+        if (closestSupply) {
+
+
+
+            // 创建路线
+
+
+
+            const route = {
+
+
+
+                type: "Feature",
+
+
+
+                geometry: {
+
+
+
+                    type: "LineString",
+
+
+
+                    coordinates: [
+
+
+
+                        [closestSupply.lng, closestSupply.lat],
+
+
+
+                        [demandPoint.lng, demandPoint.lat]
+
+
+
+                    ]
+
+
+
+                },
+
+
+
+                properties: {
+
+
+
+                    id: "route" + routeId++,
+
+
+
+                    from: closestSupply.name,
+
+
+
+                    to: demandPoint.name,
+
+
+
+                    amount: Math.min(Math.abs(closestSupply.transfer), Math.abs(demandPoint.transfer)),
+
+
+
+                    distance: Math.round(minDistance)
+
+
+
+                }
+
+
+
+            };
+
+
+
+            
+
+
+
+            features.push(route);
+
+
+
+            
+
+
+
+            // 减少供应点的数量
+
+
+
+            closestSupply.transfer += route.properties.amount; // 供应点减少（因为transfer是负数）
+
+
+
+            if (closestSupply.transfer >= 0) { // 供应耗尽
+
+
+
+                const supplyIndex = supplyPoints.findIndex(s => s.id === closestSupply.id);
+
+
+
+                if (supplyIndex >= 0) {
+
+
+
+                    supplyPoints.splice(supplyIndex, 1);
+
+
+
+                }
+
+
+
+            }
+
+
+
+            
+
+
+
+            // 减少需求点的数常
+
+
+            demandPoint.transfer -= route.properties.amount; // 需求点减少
+
+
+
+            if (demandPoint.transfer <= 0) { // 需求满足
+
+
+                const demandIndex = demandPoints.findIndex(d => d.id === demandPoint.id);
+
+
+
+                if (demandIndex >= 0) {
+
+
+
+                    demandPoints.splice(demandIndex, 1);
+
+
+
+                }
+
+
+
+            }
+
+
+
+        }
+
+
+
+    });
+
+
+
+    
+
+
+
+    return {
+
+
+
+        type: "FeatureCollection",
+
+
+
+        features: features
+
+
+
+    };
+
+
+
+}
+
+
+
+
+
+
+
+// 渲染调度路线
+
+
+
+function renderDispatch(geoJson) {
+
+
+
+    // 清除旧的调度路线
+
+
+
+    dispatchLines.forEach(line => map.removeOverlay(line));
+
+
+
+    dispatchMarkers.forEach(marker => map.removeOverlay(marker));
+
+
+
+    dispatchLines = [];
+
+
+
+    dispatchMarkers = [];
+
+
+
+    // 动态颜色数组，为不同车辆分配不同颜色
+    const colorPalette = ['#9c27b0', '#2196f3', '#ff9800', '#4caf50', '#f44336', '#00bcd4', '#e91e63', '#795548'];
+    let routeIndex = 0;
+
+
+
+    if (!geoJson || !geoJson.features) {
+
+
+
+        return;
+
+    }
+
+
+
+    // 分离LineString和Point要素，LineString是路线，Point是起终点标记
+    const lineFeatures = geoJson.features.filter(f => f.geometry && f.geometry.type === 'LineString');
+    const pointFeatures = geoJson.features.filter(f => f.geometry && f.geometry.type === 'Point');
+
+    // 首先渲染所有路线
+    lineFeatures.forEach((feature, idx) => {
+
+
+
+        if (!feature.geometry || !feature.geometry.coordinates) return;
+
+
+
+        const coordinates = feature.geometry.coordinates;
+
+
+
+        if (coordinates.length < 2) return;
+
+
+
+        // 创建百度地图点数
+        const points = coordinates.map(coord => {
+
+            const [lng, lat] = coord;
+
+            return new BMap.Point(lng, lat);
+
+        });
+
+
+
+        // 使用动态颜色
+        const color = colorPalette[routeIndex % colorPalette.length];
+
+
+
+        // 创建路线
+        const polyline = new BMap.Polyline(points, {
+
+            strokeColor: color,
+
+            strokeWeight: 3,
+
+            strokeOpacity: 0.8
+
+        });
+
+
+
+        // 存储路线颜色和索引用于后续高亮
+        polyline.routeColor = color;
+        polyline.routeIndex = routeIndex;
+        polyline.vehicleId = feature.properties?.vehicle_id || routeIndex + 1;
+
+
+
+        map.addOverlay(polyline);
+
+        dispatchLines.push(polyline);
+
+        routeIndex++;
+
+    });
+
+
+    // 渲染起终点标记（通过Point要素）
+    pointFeatures.forEach(feature => {
+
+        const [lng, lat] = feature.geometry.coordinates;
+        const point = new BMap.Point(lng, lat);
+        const typeText = feature.properties?.type_text || '需求';
+        const isSupply = typeText === '供应';
+
+        const marker = new BMap.Marker(point, {
+            icon: new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+                scale: 1.2,
+                strokeWeight: 1,
+                strokeColor: isSupply ? "#27ae60" : "#e74c3c",
+                fillColor: isSupply ? "#27ae60" : "#e74c3c",
+                fillOpacity: 0.9
+            })
+        });
+
+        map.addOverlay(marker);
+        dispatchMarkers.push(marker);
+
+    });
+
+
+
+}
+
+
+
+
+
+
+
+// 计算方案得分
+
+
+
+function calculateSchemeScore(pointCount) {
+
+
+
+    if (typeof pointCount === 'number') {
+        const baseScore = pointCount * 10;
+        return Math.min(baseScore, 100);
+    }
+
+    const metrics = pointCount;
+    if (!metrics || typeof metrics !== 'object') {
+        return 0;
+    }
+
+    const coverage = Number(metrics.coverage) || 0;
+    const avgDistance = Number(metrics.avg_distance ?? metrics.avgDistance) || 0;
+    const balance = Number(metrics.balance) || 0;
+
+    const coverageScore = Math.max(0, Math.min(coverage, 1)) * 40;
+    const distanceScore = Math.max(0, 1 - Math.min(avgDistance, 500) / 500) * 30;
+    const balanceScore = Math.max(0, Math.min(balance, 100)) * 0.3;
+
+    return coverageScore + distanceScore + balanceScore;
+
+
+
+}
+
+
+
+
+
+
+
+// ==================== 登录/注册功能 ====================
+
+
+
+
+
+
+
+// 切换登录/注册桨单
+
+
+
+function toggleAuthForm(formType) {
+
+
+
+    const loginForm = document.getElementById('loginForm');
+
+
+
+    const registerForm = document.getElementById('registerForm');
+
+
+
+    
+
+
+
+    if (formType === 'login') {
+
+
+
+        loginForm.style.display = 'block';
+
+
+
+        registerForm.style.display = 'none';
+
+
+
+    } else if (formType === 'register') {
+
+
+
+        loginForm.style.display = 'none';
+
+
+
+        registerForm.style.display = 'block';
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 处理登录
+
+
+
+function handleLogin() {
+
+
+
+    const username = document.getElementById('loginUsername').value;
+
+
+
+    const password = document.getElementById('loginPassword').value;
+
+
+
+    const role = document.getElementById('role-select').value;
+
+
+
+    
+
+
+
+    // 简单的登录验证
+
+
+
+    if (username === 'admin' && password === 'admin') {
+
+
+
+        // 登录成功
+
+
+
+        document.getElementById('loginPage').style.display = 'none';
+
+
+
+        document.getElementById('systemPage').style.display = 'flex';
+
+
+
+        document.getElementById('currentUser').textContent = role === 'admin' ? '管理常' : '调度常';
+
+
+
+        
+
+
+
+        // 初始化地常
+
+
+        initMap();
+
+
+
+        
+
+
+
+        // 加载系统数据
+
+
+
+        loadSystemData();
+
+
+
+    } else {
+
+
+
+        alert('用户名或密码错毯，请使用演示账号: admin / admin');
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 处理注册
+
+
+
+function handleRegister() {
+
+
+
+    const username = document.getElementById('regUsername').value;
+
+
+
+    const password = document.getElementById('regPassword').value;
+
+
+
+    const password2 = document.getElementById('regPassword2').value;
+
+
+
+    
+
+
+
+    if (!username || !password) {
+
+
+
+        alert('请输入用户名和密常');
+
+
+
+        return;
+
+
+
+    }
+
+
+
+    
+
+
+
+    if (password !== password2) {
+
+
+
+        alert('两次输入的密码不一致');
+
+
+
+        return;
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 简单的注册逻编辑
+
+
+
+    alert('注册成功，请使用新账号登常');
+
+
+
+    toggleAuthForm('login');
+
+
+
+}
+
+
+
+
+
+
+
+// 处理退出登常
+
+
+function handleLogout() {
+
+
+
+    document.getElementById('systemPage').style.display = 'none';
+
+
+
+    document.getElementById('loginPage').style.display = 'flex';
+
+
+
+}
+
+
+
+
+
+
+
+// 热力图实常
+
+
+let heatmapLayer = null;
+
+
+
+
+
+
+
+// 热力图标记数常
+
+
+let heatmapMarkers = [];
+
+
+
+
+
+
+
+// 更新热力常
+
+
+function updateHeatmap() {
+
+
+
+    if (!map) {
+        showToast('地图尚未初始化');
+        return;
+    }
+
+    heatmapMarkers.forEach(marker => map.removeOverlay(marker));
+    heatmapMarkers = [];
+
+    if (heatmapLayer) {
+        map.removeOverlay(heatmapLayer);
+        heatmapLayer = null;
+    }
+
+    const timeSlot = document.getElementById('heatmap-time')?.value || 'morning';
+
+    fetch(`/api/heatmap-data?time=${timeSlot}`)
+        .then(response => response.json())
+        .then(data => {
+            const rawHeatmapData = (data && data.points && data.points.length > 0)
+                ? data.points
+                : (MOCK_HEATMAP_DATA[timeSlot] || []);
+
+            const points = normalizeHeatmapData(rawHeatmapData);
+            if (points.length === 0) {
+                showToast('当前时段暂无热力图数据');
+                return;
+            }
+
+            const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
+            const maxCount = points.reduce((max, p) => Math.max(max, p.count), 1);
+
+            if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
+                heatmapLayer = new BMapLib.HeatmapOverlay({
+                    radius: 28,
+                    gradient: {
+                        0.2: '#2d7cff',
+                        0.45: '#00c2ff',
+                        0.65: '#39d98a',
+                        0.8: '#ffd166',
+                        1.0: '#ff5a5f'
+                    }
+                });
+
+                map.addOverlay(heatmapLayer);
+                heatmapLayer.setDataSet({ data: points, max: maxCount });
+
+                if (showHeatmap) {
+                    heatmapLayer.show();
+                } else {
+                    heatmapLayer.hide();
+                }
+
+                return;
+            }
+
+            points.forEach(p => {
+                const markerPoint = new BMap.Point(p.lng, p.lat);
+                const normalized = Math.max(0, Math.min(1, p.count / maxCount));
+                const size = 6 + normalized * 16;
+
+                const icon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+                    scale: size / 10,
+                    strokeWeight: 0,
+                    fillColor: getHeatmapColor(normalized),
+                    fillOpacity: 0.55
+                });
+
+                const marker = new BMap.Marker(markerPoint, { icon });
+                marker.setVisible(showHeatmap);
+                map.addOverlay(marker);
+                heatmapMarkers.push(marker);
+            });
+        })
+        .catch(error => {
+            console.error('加载热力图数据失败', error);
+            showToast('热力图数据加载失败');
+        });
+
+
+
+}
+
+
+
+
+function normalizeHeatmapData(rawHeatmapData) {
+    const result = [];
+
+    (rawHeatmapData || []).forEach(point => {
+        if (!Array.isArray(point) || point.length < 3) {
+            return;
+        }
+
+        const first = Number(point[0]);
+        const second = Number(point[1]);
+        let intensity = Number(point[2]);
+
+        if (!Number.isFinite(first) || !Number.isFinite(second) || !Number.isFinite(intensity)) {
+            return;
+        }
+
+        let lat;
+        let lng;
+
+        const firstLooksLikeLat = first >= -90 && first <= 90;
+        const secondLooksLikeLat = second >= -90 && second <= 90;
+
+        if (firstLooksLikeLat && !secondLooksLikeLat) {
+            lat = first;
+            lng = second;
+        } else if (!firstLooksLikeLat && secondLooksLikeLat) {
+            lng = first;
+            lat = second;
+        } else {
+            lat = first;
+            lng = second;
+        }
+
+        if (intensity <= 1) {
+            intensity = intensity * 100;
+        }
+
+        result.push({ lng, lat, count: Math.max(1, intensity) });
+    });
+
+    return result;
+}
+
+
+
+
+
+
+
+// 根据强度获取热力图颜常
+
+
+function getHeatmapColor(intensity) {
+
+
+
+    if (intensity < 0.4) return '#0000ff'; // blue
+
+
+
+    if (intensity < 0.6) return '#00ffff'; // cyan
+
+
+
+    if (intensity < 0.7) return '#00ff00'; // lime
+
+
+
+    if (intensity < 0.8) return '#ffff00'; // yellow
+
+
+
+    return '#ff0000'; // red
+
+
+
+}
+
+
+
+
+
+
+
+// 加载系统数据
+
+
+
+function loadSystemData() {
+
+
+
+    // 模拟加载系统数据
+
+
+
+    setTimeout(() => {
+
+
+
+        // 更新系统状常
+
+
+        document.getElementById('total-bikes').textContent = '200';
+
+
+
+        document.getElementById('available-bikes').textContent = '150';
+
+
+
+        document.getElementById('low-battery-bikes').textContent = '25';
+
+
+
+        document.getElementById('total-demand').textContent = '85';
+
+
+
+        
+
+
+
+        // 初始化热力图
+
+
+
+        // 暂时不自动初始化热力图，让用户点击更新热力图按钮来显示
+
+
+        // updateHeatmap();
+
+
+
+    }, 500);
+
+
+
+}
+
+
+
+
+
+
+
+// 初始化登录页常
+
+
+function initLoginPage() {
+
+
+
+    // 殾置默认常
+
+
+    document.getElementById('loginUsername').value = 'admin';
+
+
+
+    document.getElementById('loginPassword').value = 'admin';
+
+
+
+}
+
+
+
+
+
+
+
+// 初始化菜单切换功能
+
+
+function initMenuSwitch() {
+
+
+
+    const menuItems = document.querySelectorAll('.menu-item');
+
+
+
+    const modules = document.querySelectorAll('[id$="-module"]');
+
+
+
+    
+
+
+
+    menuItems.forEach(item => {
+
+
+
+        item.addEventListener('click', function() {
+
+
+
+            // 移除所有菜单项的active类
+            menuItems.forEach(menuItem => menuItem.classList.remove('active'));
+            // 添加当前菜单项的active类
+            this.classList.add('active');
+            // 获取当前模块ID
+            const moduleId = this.getAttribute('data-module') + '-module';
+
+
+
+            
+
+
+
+            // 隐藏所有模块
+
+
+            modules.forEach(module => {
+
+
+
+                module.style.display = 'none';
+
+
+
+            });
+
+
+
+            
+
+
+
+            // 显示当前模块
+
+
+
+            const currentModule = document.getElementById(moduleId);
+
+
+
+            if (currentModule) {
+
+
+
+                currentModule.style.display = 'block';
+
+
+
+            }
+
+
+
+        });
+
+
+
+    });
+
+
+
+}
+
+
+
+
+
+
+
+// 绘制校园边界
+
+
+
+function drawCampusBoundary() {
+
+
+
+    // 清除旧的校园边界
+
+
+
+    if (campusBoundaryLayer && campusBoundaryLayer.length > 0) {
+
+
+
+        campusBoundaryLayer.forEach(layer => {
+
+
+
+            map.removeOverlay(layer);
+
+
+
+        });
+
+
+
+        campusBoundaryLayer = [];
+
+
+
+    } else {
+
+
+
+        campusBoundaryLayer = [];
+
+
+
+    }
+
+
+
+    
+
+
+
+    // 加载校园边界数据
+
+
+
+    fetch('data_bd09/WHUInfo_Area.geojson')
+
+
+
+        .then(response => response.json())
+
+
+
+        .then(data => {
+
+
+
+            if (data && data.features && data.features.length > 0) {
+
+
+
+                // 濇滤出name值为WhuInfo的feature
+
+
+
+                const boundaryFeature = data.features.find(feature => {
+
+
+
+                    return feature.properties && feature.properties.name === 'WhuInfo';
+
+
+
+                });
+
+
+
+                
+
+
+
+                if (boundaryFeature && boundaryFeature.geometry) {
+
+
+
+                    if (boundaryFeature.geometry.type === 'Polygon') {
+
+
+
+                        const coordinates = boundaryFeature.geometry.coordinates;
+
+
+
+                        coordinates.forEach(ring => {
+
+
+
+                            const points = ring.map(coord => {
+
+
+
+                                const [lng, lat] = coord;
+
+
+
+                                return new BMap.Point(lng, lat);
+
+
+
+                            });
+
+
+
+                            
+
+
+
+                            // 创建边界线（不填充）
+
+
+
+                            const polygon = new BMap.Polygon(points, {
+
+
+
+                                strokeColor: '#3498db',
+
+
+
+                                strokeWeight: 2,
+
+
+
+                                strokeOpacity: 0.8,
+
+
+
+                                fillColor: 'transparent',
+
+
+
+                                fillOpacity: 0 // 不填常
+
+
+                            });
+
+
+
+                            
+
+
+
+                            map.addOverlay(polygon);
+
+
+
+                            campusBoundaryLayer.push(polygon);
+
+
+
+                        });
+
+
+
+                    } else if (boundaryFeature.geometry.type === 'MultiPolygon') {
+
+
+
+                        const coordinates = boundaryFeature.geometry.coordinates;
+
+
+
+                        coordinates.forEach(polygonCoords => {
+
+
+
+                            polygonCoords.forEach(ring => {
+
+
+
+                                const points = ring.map(coord => {
+
+
+
+                                    const [lng, lat] = coord;
+
+
+
+                                    return new BMap.Point(lng, lat);
+
+
+
+                                });
+
+
+
+                                
+
+
+
+                                // 创建边界线（不填充）
+
+
+
+                                const polygon = new BMap.Polygon(points, {
+
+
+
+                                    strokeColor: '#3498db',
+
+
+
+                                    strokeWeight: 2,
+
+
+
+                                    strokeOpacity: 0.8,
+
+
+
+                                    fillColor: 'transparent',
+
+
+
+                                    fillOpacity: 0 // 不填常
+
+
+                                });
+
+
+
+                                
+
+
+
+                                map.addOverlay(polygon);
+
+
+
+                                campusBoundaryLayer.push(polygon);
+
+
+
+                            });
+
+
+
+                        });
+
+
+
+                    }
+
+
+
+                    console.log('校园边界绘制完成');
+
+
+
+                } else {
+
+
+
+                    console.warn('无法找到name为WhuInfo的边界特征');
+
+
+
+                }
+
+
+
+            } else {
+
+
+
+                console.warn('校园边界数据为空');
+
+
+
+            }
+
+
+
+        })
+
+
+
+        .catch(error => {
+
+
+
+            console.error('加载校园边界数据失津:', error);
+
+
+
+        });
+
+
+
+}
+
+
+
+
+
+
+
+// 加载地图数据（不加载POI数据常
+
+
+function loadMapData() {
+
+
+
+    // 只加载道路数据，不加载POI数据
+
+
+
+    fetch('data_bd09/WHUInfo_Roads.geojson')
+
+
+
+        .then(response => response.json())
+
+
+
+        .then(data => {
+
+
+
+            if (data && data.features && data.features.length > 0) {
+
+
+
+                data.features.forEach(feature => {
+
+
+
+                    if (feature.geometry && feature.geometry.type === 'LineString') {
+
+
+
+                        const coordinates = feature.geometry.coordinates;
+
+
+
+                        const points = coordinates.map(coord => {
+
+
+
+                            const [lng, lat] = coord;
+
+
+
+                            return new BMap.Point(lng, lat);
+
+
+
+                        });
+
+
+
+                        
+
+
+
+                        // 创建道路常
+
+
+                        const polyline = new BMap.Polyline(points, {
+
+
+
+                            strokeColor: '#999',
+
+
+
+                            strokeWeight: 2,
+
+
+
+                            strokeOpacity: 0.6
+
+
+
+                        });
+
+
+
+                        
+
+
+
+                        map.addOverlay(polyline);
+
+
+
+                    }
+
+
+
+                });
+
+
+
+                console.log('道路数据加载完成');
+
+
+
+            }
+
+
+
+        })
+
+
+
+        .catch(error => {
+
+
+
+            console.error('加载道路数据失津:', error);
+
+
+
+        });
+
+
+
+}
+
+
+
+
+
+
+
+// 初始化图层控制
+
+
+function initLayerControl() {
+
+
+
+    // 为其他图层添加事件监听器
+
+
+
+    const layerCheckboxes = document.querySelectorAll('input[type="checkbox"][id^="layer-"]');
+
+
+
+    layerCheckboxes.forEach(checkbox => {
+
+
+
+        checkbox.addEventListener('change', function() {
+
+
+
+            updateLayerVisibility();
+
+
+
+        });
+
+
+
+    });
+
+
+
+}
+
+
+
+
+
+
+
+// 更新图层可见性
+
+
+function updateLayerVisibility() {
+
+
+
+    // 智能选址点和覆盖范围
+
+
+
+    const showSmartParking = document.getElementById('layer-smart-parking')?.checked;
+
+
+
+    const showSmartCoverage = document.getElementById('layer-smart-coverage')?.checked;
+
+
+
+    
+
+
+
+    smartMarkers.forEach(item => {
+
+
+
+        item.marker.setVisible(showSmartParking);
+
+
+
+    });
+
+
+
+    
+
+
+
+    smartCircles.forEach(circle => {
+
+
+
+        circle.setVisible(showSmartCoverage);
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 人工选址点和覆盖范围
+
+
+
+    const showManualParking = document.getElementById('layer-manual-parking')?.checked;
+
+
+
+    const showManualCoverage = document.getElementById('layer-manual-coverage')?.checked;
+
+
+
+    
+
+
+
+    manualMarkers.forEach(item => {
+
+
+
+        item.marker.setVisible(showManualParking);
+
+
+
+    });
+
+
+
+    
+
+
+
+    manualCircles.forEach(circle => {
+
+
+
+        circle.setVisible(showManualCoverage);
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 调度路线
+
+
+
+    const showDispatch = document.getElementById('layer-dispatch')?.checked;
+
+
+
+    dispatchLines.forEach(line => {
+
+
+
+        line.setVisible(showDispatch);
+
+
+
+    });
+
+
+
+    dispatchMarkers.forEach(marker => {
+
+
+
+        marker.setVisible(showDispatch);
+
+
+
+    });
+
+
+
+    // 需求热力图
+
+
+    const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
+
+
+
+    if (heatmapLayer && typeof heatmapLayer.show === 'function' && typeof heatmapLayer.hide === 'function') {
+
+
+
+        if (showHeatmap) {
+
+
+
+            heatmapLayer.show();
+
+
+
+        } else {
+
+
+
+            heatmapLayer.hide();
+
+
+
+        }
+
+
+
+    }
+
+
+
+    heatmapMarkers.forEach(marker => {
+
+
+
+        marker.setVisible(!!showHeatmap);
+
+
+
+    });
+
+
+
+    
+
+
+
+    // 校园边界
+
+
+
+    const showBoundary = document.getElementById('layer-boundary')?.checked;
+
+
+
+    if (campusBoundaryLayer && campusBoundaryLayer.length > 0) {
+
+
+
+        campusBoundaryLayer.forEach(layer => {
+
+
+
+            if (layer.setVisible) {
+
+
+
+                layer.setVisible(showBoundary);
+
+
+
+            }
+
+
+
+        });
+
+
+
+    }
+
+
+
+}
+
+
+
+
+
+
+
+// 切换AI对话框显示/隐藏
+function toggleAIDialog() {
+    const content = document.getElementById('ai-dialog-content');
+    if (content) {
+        content.classList.toggle('hidden');
+    }
+}
+
+// 生成AI对比分析简报
+function generateAIReport() {
+    const reportCard = document.getElementById('ai-report-card');
+    const reportContent = document.getElementById('ai-report-content');
+    
+    if (reportCard && reportContent) {
+        reportContent.textContent = 'AI分析结果：\n\n基于智能选址和人工选址方案的对比，智能选址方案在覆盖率和均衡性方面表现更优。建议采用智能选址方案作为基础，结合人工经验进行微调。';
+        reportCard.style.display = 'block';
+    }
+}
+
+// 生成AI调度优先级建议
+function generateAIPriority() {
+    const priorityCard = document.getElementById('ai-priority-card');
+    const priorityList = document.getElementById('ai-priority-list');
+    
+    if (priorityCard && priorityList) {
+        priorityList.innerHTML = `
+            <li>1. 学生宿舍区 - 早高峰需求高</li>
+            <li>2. 教学楼区域 - 上课时间需求集中</li>
+            <li>3. 食堂周边 - 用餐时间需求大</li>
+            <li>4. 图书馆附近 - 学习时间需求稳定</li>
+        `;
+        priorityCard.style.display = 'block';
+    }
+}
+
+// 开始自定义截图
+function startCustomScreenshot() {
+    alert('截图功能开发中');
+}
+
+// 导出方案
+function exportScheme() {
+    alert('方案导出功能开发中');
+}
+
+// 显示智能与人工方案对比
+function showComparison() {
+    const rendered = renderComparisonAnalysisPanel();
+    if (!rendered) {
+        showToast('请先运行智能选址和人工选址方案');
+        return;
+    }
+
+    updateCoreMetrics();
+    generateSupplyDemandTable(getActiveSupplyTimeSlot());
+
+    const analysis = getComparisonAnalysis();
+    const recommendedText = analysis.recommendedScheme === 'smart' ? '智能选址方案' : '人工选址方案';
+    showToast(`方案对比分析已更新，推荐：${recommendedText}`);
+}
+
+
+
+
+function renderComparisonAnalysisPanel() {
+    const analysis = getComparisonAnalysis();
+    if (!analysis.smartMetrics || !analysis.manualMetrics) {
+        return false;
+    }
+
+    const canvas = document.getElementById('comparisonChart');
+    const placeholder = document.getElementById('comparison-placeholder');
+    if (!canvas || typeof Chart === 'undefined') {
+        return false;
+    }
+
+    const smartDistanceScore = Math.max(0, 100 - Math.min(analysis.smartMetrics.avg_distance, 500) / 5);
+    const manualDistanceScore = Math.max(0, 100 - Math.min(analysis.manualMetrics.avg_distance, 500) / 5);
+
+    if (comparisonChart) {
+        comparisonChart.destroy();
+    }
+
+    const ctx = canvas.getContext('2d');
+    comparisonChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['覆盖率(%)', '步行距离得分', '均衡性指数', '综合得分'],
+            datasets: [
+                {
+                    label: '智能选址',
+                    data: [
+                        analysis.smartMetrics.coverage * 100,
+                        smartDistanceScore,
+                        analysis.smartMetrics.balance,
+                        analysis.smartScore
+                    ],
+                    backgroundColor: 'rgba(26, 115, 232, 0.6)',
+                    borderColor: 'rgba(26, 115, 232, 1)',
+                    borderWidth: 1
+                },
+                {
+                    label: '人工选址',
+                    data: [
+                        analysis.manualMetrics.coverage * 100,
+                        manualDistanceScore,
+                        analysis.manualMetrics.balance,
+                        analysis.manualScore
+                    ],
+                    backgroundColor: 'rgba(234, 67, 53, 0.6)',
+                    borderColor: 'rgba(234, 67, 53, 1)',
+                    borderWidth: 1
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100
+                }
+            },
+            plugins: {
+                legend: {
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        afterBody: function() {
+                            return '步行距离得分越高表示距离越短';
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    const recommendedText = analysis.recommendedScheme === 'smart' ? '推荐方案：智能选址方案' : '推荐方案：人工选址方案';
+    const scoreText = `综合得分 智能 ${analysis.smartScore.toFixed(1)} / 人工 ${analysis.manualScore.toFixed(1)}`;
+
+    if (placeholder) {
+        placeholder.style.display = 'flex';
+        placeholder.style.position = 'absolute';
+        placeholder.style.alignItems = 'flex-end';
+        placeholder.style.justifyContent = 'center';
+        placeholder.style.pointerEvents = 'none';
+        placeholder.style.background = 'transparent';
+        placeholder.style.color = '#555';
+        placeholder.style.fontSize = '12px';
+        placeholder.innerHTML = `<div style="background: rgba(255,255,255,0.88); border-radius: 6px; padding: 6px 10px; margin-bottom: 4px;">${recommendedText}，${scoreText}</div>`;
+    }
+
+    return true;
+}
+
+// 生成电单车模拟
+function generateEbikeSimulation() {
+    alert('电单车模拟功能开发中');
+}
+
+// 切换电单车动画
+function toggleEbikeAnimation() {
+    alert('动画控制功能开发中');
+}
+
+// 清除电单车模拟
+function clearEbikeSimulation() {
+    alert('清除模拟功能开发中');
+}
+
+// 筛选低电量车辆
+function filterLowBattery() {
+    alert('低电量筛选功能开发中');
+}
+
+// 生成换电路线
+function generateBatteryRoute() {
+    alert('换电路线生成功能开发中');
+}
+
+// 清除模拟
+function clearSimulation() {
+    alert('清除模拟功能开发中');
+}
+
+// 页面加载完成后初始化
+
+
+
+window.onload = function() {
+
+
+
+    initLoginPage();
+
+
+
+    // 初始化菜单切换功能
+
+
+    setTimeout(() => {
+
+
+
+        initMenuSwitch();
+
+
+
+        // 初始化图层控制
+
+
+        initLayerControl();
+
+
+
+    }, 100);
+
+
+
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

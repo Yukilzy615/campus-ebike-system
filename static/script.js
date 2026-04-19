@@ -8478,6 +8478,36 @@ function escapeHtml(text) {
         .replace(/'/g, '&#39;');
 }
 
+// function renderCompareReport(result) {
+//     const card = document.getElementById('ai-report-card');
+//     const content = document.getElementById('ai-report-content');
+//     if (!card || !content) {
+//         return;
+//     }
+
+//     const rawText = String(result?.text || AI_RESULT_FALLBACK_TEXT).trim();
+//     const recommended = String(result?.recommended_scheme || '待评估').trim();
+//     const sentences = rawText
+//         .split(/[。！？!?]/)
+//         .map(item => item.trim())
+//         .filter(Boolean)
+//         .slice(0, 6);
+
+//     if (!sentences.length) {
+//         content.textContent = AI_RESULT_FALLBACK_TEXT;
+//         card.style.display = 'block';
+//         return;
+//     }
+
+//     const summaryHtml = `<div class="ai-report-summary">推荐方案：<strong>${escapeHtml(recommended)}</strong></div>`;
+//     const listHtml = `<ul class="ai-report-list">${sentences
+//         .map(item => `<li>${escapeHtml(item)}。</li>`)
+//         .join('')}</ul>`;
+
+//     content.innerHTML = summaryHtml + listHtml;
+//     card.style.display = 'block';
+// }
+
 function renderCompareReport(result) {
     const card = document.getElementById('ai-report-card');
     const content = document.getElementById('ai-report-content');
@@ -8486,7 +8516,6 @@ function renderCompareReport(result) {
     }
 
     const rawText = String(result?.text || AI_RESULT_FALLBACK_TEXT).trim();
-    const recommended = String(result?.recommended_scheme || '待评估').trim();
     const sentences = rawText
         .split(/[。！？!?]/)
         .map(item => item.trim())
@@ -8499,12 +8528,11 @@ function renderCompareReport(result) {
         return;
     }
 
-    const summaryHtml = `<div class="ai-report-summary">推荐方案：<strong>${escapeHtml(recommended)}</strong></div>`;
     const listHtml = `<ul class="ai-report-list">${sentences
         .map(item => `<li>${escapeHtml(item)}。</li>`)
         .join('')}</ul>`;
 
-    content.innerHTML = summaryHtml + listHtml;
+    content.innerHTML = listHtml;
     card.style.display = 'block';
 }
 

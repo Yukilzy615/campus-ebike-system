@@ -1,40 +1,24 @@
+"""
+自研规则型智能辅助决策模块
+用于：
+- 方案解释
+- 调度待办
+- 风险预警
+- 决策问答（表单式）
+- 受限业务问答
+
+注意：
+1. 不参与 NSGA-II / ACO 核心优化计算
+2. 仅基于前端传入的结构化结果做解释与建议
+3. 输出尽量具体，避免空话
+"""
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
-PRIORITY_LABELS = {
-    "high": "高",
-    "medium": "中",
-    "low": "低",
-}
-
-
-PREFERENCE_TEXT = {
-    "coverage": "优先覆盖率",
-    "cost": "优先降低调度成本",
-    "balance": "优先负载均衡",
-    "speed": "优先快速缓解缺车",
-}
-
-
-ROLE_TIPS = {
-    "admin": "管理员视角：关注全局方案、重点风险和任务优先级。",
-    "dispatcher": "调度员视角：关注可执行任务顺序、重点站点和路线落地。",
-}
-
-
-RISK_THRESHOLDS = {
-    "coverage_low": 60,
-    "coverage_warn": 75,
-    "balance_warn": 0.55,
-    "walk_warn": 180,
-    "shortage_warn": 3,
-    "low_battery_warn": 10,
-}
-
-
-def _safe_float(value: Any, default: float = 0.0) -> float:
+def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
             return default
@@ -43,7 +27,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _safe_int(value: Any, default: int = 0) -> int:
+def _to_int(value: Any, default: int = 0) -> int:
     try:
         if value is None or value == "":
             return default
@@ -52,262 +36,597 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _normalize_role(role: Any) -> str:
-    role_str = str(role or "admin").strip().lower()
-    return "dispatcher" if role_str == "dispatcher" else "admin"
+def _safe_text(value: Any, default: str = "") -> str:
+    if value is None:
+        return default
+    text = str(value).strip()
+    return text if text else default
 
 
-def _best_scheme_name(compare: Dict[str, Any]) -> str:
-    recommended = str(compare.get("recommended_scheme") or "").strip().lower()
-    if recommended in {"smart", "智能", "智能选址"}:
-        return "智能方案"
-    if recommended in {"manual", "人工", "人工选址"}:
-        return "人工方案"
+def _pct(value: Any) -> float:
+    num = _to_float(value, 0.0)
+    return num * 100 if 0 < num <= 1 else num
 
+
+def _get_role_name(role: str) -> str:
+    return "调度员" if role == "dispatcher" else "管理员"
+
+
+def _extract_compare(payload: Dict[str, Any]) -> Dict[str, Any]:
+    compare = payload.get("compare") or {}
     smart = compare.get("smart") or {}
     manual = compare.get("manual") or {}
-    smart_score = 0
-    manual_score = 0
-
-    if _safe_float(smart.get("coverage")) >= _safe_float(manual.get("coverage")):
-        smart_score += 1
-    else:
-        manual_score += 1
-
-    if _safe_float(smart.get("avg_distance"), 10**9) <= _safe_float(manual.get("avg_distance"), 10**9):
-        smart_score += 1
-    else:
-        manual_score += 1
-
-    if _safe_float(smart.get("balance")) <= _safe_float(manual.get("balance")):
-        smart_score += 1
-    else:
-        manual_score += 1
-
-    return "智能方案" if smart_score >= manual_score else "人工方案"
+    return {
+        "smart": {
+            "coverage": _pct(smart.get("coverage")),
+            "avg_distance": _to_float(smart.get("avg_distance")),
+            "balance": _to_float(smart.get("balance")),
+            "capacity": _to_float(smart.get("capacity")),
+        },
+        "manual": {
+            "coverage": _pct(manual.get("coverage")),
+            "avg_distance": _to_float(manual.get("avg_distance")),
+            "balance": _to_float(manual.get("balance")),
+            "capacity": _to_float(manual.get("capacity")),
+        },
+        "recommended_scheme": _safe_text(compare.get("recommended_scheme"), "none"),
+    }
 
 
-def _scheme_metric_sentence(name: str, metrics: Dict[str, Any]) -> str:
-    return (
-        f"{name}覆盖率{_safe_float(metrics.get('coverage')):.1f}%"
-        f"，平均步行距离{_safe_float(metrics.get('avg_distance')):.0f}米"
-        f"，均衡性{_safe_float(metrics.get('balance')):.2f}"
-        f"，总容量{_safe_int(metrics.get('capacity'))}。"
-    )
-
-
-def _top_dispatch_items(dispatch: Dict[str, Any], limit: int = 5) -> List[Dict[str, Any]]:
-    routes = dispatch.get("routes") or dispatch.get("route_list") or []
-    normalized: List[Dict[str, Any]] = []
-    for idx, item in enumerate(routes):
-        normalized.append({
-            "name": item.get("name") or item.get("route_name") or item.get("target") or f"任务{idx + 1}",
-            "from": item.get("from") or item.get("source") or item.get("supply_point") or "-",
-            "to": item.get("to") or item.get("destination") or item.get("demand_point") or "-",
-            "transfer": _safe_int(item.get("transfer") or item.get("transfer_count") or item.get("amount")),
-            "shortage": _safe_int(item.get("shortage") or item.get("demand_gap") or item.get("need")),
-            "distance": _safe_float(item.get("distance") or item.get("distance_m") or item.get("total_distance_m")),
-        })
-    normalized.sort(key=lambda x: (-(x["shortage"] or x["transfer"]), x["distance"] or 10**9))
-    return normalized[:limit]
-
-
-def _build_priority_text(item: Dict[str, Any], rank: int, role: str) -> str:
-    if role == "dispatcher":
-        return (
-            f"{rank}. 优先处理 {item['from']} → {item['to']}，"
-            f"建议先转运{max(item['transfer'], item['shortage'])}辆。"
-        )
-    return (
-        f"{rank}. {item['from']} → {item['to']} 优先级高，"
-        f"当前建议转运{max(item['transfer'], item['shortage'])}辆，"
-        f"预计距离{item['distance']:.0f}米。"
-    )
-
-
-def _risk_items(payload: Dict[str, Any]) -> List[Dict[str, str]]:
-    metrics = payload.get("metrics") or payload.get("dashboard") or {}
-    compare = payload.get("compare") or {}
+def _extract_dispatch(payload: Dict[str, Any]) -> Dict[str, Any]:
     dispatch = payload.get("dispatch") or {}
+    routes = dispatch.get("routes") or []
+    cleaned = []
+    for idx, item in enumerate(routes):
+        cleaned.append(
+            {
+                "name": _safe_text(item.get("name"), f"路线{idx + 1}"),
+                "from": _safe_text(item.get("from"), "供应点"),
+                "to": _safe_text(item.get("to"), "需求点"),
+                "transfer": _to_int(item.get("transfer")),
+                "shortage": _to_int(item.get("shortage")),
+                "distance_m": _to_float(item.get("distance_m")),
+            }
+        )
+    return {
+        "routes": cleaned,
+        "total_distance_m": _to_float(dispatch.get("total_distance_m")),
+        "shortage_count": _to_int(dispatch.get("shortage_count")),
+    }
+
+
+def _extract_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metrics = payload.get("metrics") or {}
+    return {
+        "coverage": _pct(metrics.get("coverage")),
+        "avg_distance": _to_float(metrics.get("avg_distance")),
+        "balance": _to_float(metrics.get("balance")),
+        "low_battery_count": _to_int(metrics.get("low_battery_count")),
+    }
+
+
+def _extract_battery(payload: Dict[str, Any]) -> Dict[str, Any]:
     battery = payload.get("battery") or {}
+    return {
+        "low_battery_count": _to_int(battery.get("low_battery_count")),
+        "route_count": _to_int(battery.get("route_count")),
+        "capacity_per_trip": _to_int(battery.get("capacity_per_trip")),
+    }
 
-    coverage = _safe_float(metrics.get("coverage") or compare.get("coverage") or (compare.get("smart") or {}).get("coverage"))
-    walk = _safe_float(metrics.get("avg_distance") or compare.get("avg_distance") or (compare.get("smart") or {}).get("avg_distance"))
-    balance = _safe_float(metrics.get("balance") or compare.get("balance") or (compare.get("smart") or {}).get("balance"))
-    shortage = _safe_int(dispatch.get("shortage_count") or dispatch.get("demand_count") or metrics.get("shortage_count"))
-    low_battery = _safe_int(battery.get("low_battery_count") or metrics.get("low_battery_count"))
 
-    risks: List[Dict[str, str]] = []
-    if coverage and coverage < RISK_THRESHOLDS["coverage_low"]:
-        risks.append({"level": "high", "text": f"当前方案覆盖率仅{coverage:.1f}%，低于安全阈值，建议优先补充薄弱区域停车点。"})
-    elif coverage and coverage < RISK_THRESHOLDS["coverage_warn"]:
-        risks.append({"level": "medium", "text": f"当前方案覆盖率为{coverage:.1f}%，已接近预警线，建议重点检查南北边缘区域。"})
+def _scheme_name(key: str) -> str:
+    mapping = {
+        "smart": "智能方案",
+        "manual": "人工方案",
+        "auto": "自动推荐方案",
+        "none": "当前未形成明确推荐方案",
+    }
+    return mapping.get(key, "当前方案")
 
-    if walk and walk > RISK_THRESHOLDS["walk_warn"]:
-        risks.append({"level": "medium", "text": f"平均步行距离约{walk:.0f}米，用户取车成本偏高，建议优化高频区域布点。"})
 
-    if balance and balance > RISK_THRESHOLDS["balance_warn"]:
-        risks.append({"level": "medium", "text": f"停车点负载均衡性偏弱（{balance:.2f}），部分站点可能长期拥挤或闲置。"})
+# def _better_scheme_by_preference(compare: Dict[str, Any], preference: str) -> Tuple[str, str]:
+#     smart = compare["smart"]
+#     manual = compare["manual"]
 
-    if shortage >= RISK_THRESHOLDS["shortage_warn"]:
-        risks.append({"level": "high", "text": f"当前存在{shortage}个明显缺车点，建议先处理宿舍区和教学楼周边。"})
+#     if preference == "coverage":
+#         if smart["coverage"] >= manual["coverage"]:
+#             return "smart", f"智能方案覆盖率更高（{smart['coverage']:.1f}% vs {manual['coverage']:.1f}%）"
+#         return "manual", f"人工方案覆盖率更高（{manual['coverage']:.1f}% vs {smart['coverage']:.1f}%）"
 
-    if low_battery >= RISK_THRESHOLDS["low_battery_warn"]:
-        risks.append({"level": "medium", "text": f"当前低电量车辆较多（{low_battery}辆），建议尽快安排换电任务，避免影响可用车供给。"})
+#     if preference == "balance":
+#         if smart["balance"] >= manual["balance"]:
+#             return "smart", f"智能方案均衡性更好（{smart['balance']:.0f} vs {manual['balance']:.0f}）"
+#         return "manual", f"人工方案均衡性更好（{manual['balance']:.0f} vs {smart['balance']:.0f}）"
 
-    if not risks:
-        risks.append({"level": "low", "text": "当前未发现明显高风险项，建议继续跟踪覆盖率、缺车点和低电量车辆数量。"})
+#     if smart["avg_distance"] <= manual["avg_distance"]:
+#         return "smart", f"智能方案平均步行距离更短（{round(smart['avg_distance'])}米 vs {round(manual['avg_distance'])}米）"
+#     return "manual", f"人工方案平均步行距离更短（{round(manual['avg_distance'])}米 vs {round(smart['avg_distance'])}米）"
 
-    return risks[:5]
+def _better_scheme_by_preference(compare: Dict[str, Any], preference: str) -> Tuple[str, str]:
+    smart = compare["smart"]
+    manual = compare["manual"]
 
+    coverage_diff = abs(smart["coverage"] - manual["coverage"])
+    distance_diff = abs(smart["avg_distance"] - manual["avg_distance"])
+    balance_diff = abs(smart["balance"] - manual["balance"])
+
+    if preference == "coverage":
+        if coverage_diff < 0.5:
+            return "tie", f"两种方案覆盖率接近（智能{smart['coverage']:.1f}% vs 人工{manual['coverage']:.1f}%）"
+        if smart["coverage"] > manual["coverage"]:
+            return "smart", f"智能方案覆盖率更高（{smart['coverage']:.1f}% vs {manual['coverage']:.1f}%）"
+        return "manual", f"人工方案覆盖率更高（{manual['coverage']:.1f}% vs {smart['coverage']:.1f}%）"
+
+    if preference == "balance":
+        if balance_diff < 1:
+            return "tie", f"两种方案负载均衡性接近（智能{smart['balance']:.0f} vs 人工{manual['balance']:.0f}）"
+        if smart["balance"] > manual["balance"]:
+            return "smart", f"智能方案均衡性更好（{smart['balance']:.0f} vs {manual['balance']:.0f}）"
+        return "manual", f"人工方案均衡性更好（{manual['balance']:.0f} vs {smart['balance']:.0f}）"
+
+    # cost / speed 默认更关注距离
+    if distance_diff < 5:
+        return "tie", f"两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）"
+    if smart["avg_distance"] < manual["avg_distance"]:
+        return "smart", f"智能方案平均步行距离更短（{round(smart['avg_distance'])}米 vs {round(manual['avg_distance'])}米）"
+    return "manual", f"人工方案平均步行距离更短（{round(manual['avg_distance'])}米 vs {round(smart['avg_distance'])}米）"
+
+
+def _rank_routes(dispatch: Dict[str, Any]) -> List[Dict[str, Any]]:
+    routes = dispatch.get("routes", [])
+    return sorted(
+        routes,
+        key=lambda x: (x["shortage"], x["transfer"], -x["distance_m"]),
+        reverse=True,
+    )
+
+
+def _top_route_sentence(dispatch: Dict[str, Any]) -> str:
+    ranked = _rank_routes(dispatch)
+    if not ranked:
+        return "当前尚未形成调度路线。"
+    top = ranked[0]
+    return (
+        f"当前优先级最高的是{top['name']}，建议优先处理“{top['from']}→{top['to']}”，"
+        f"转运{top['transfer']}辆，关联缺口{top['shortage']}辆，路线长度约{round(top['distance_m'])}米。"
+    )
+
+
+def _risk_bullets(metrics: Dict[str, Any], dispatch: Dict[str, Any], battery: Dict[str, Any], compare: Optional[Dict[str, Any]]) -> List[str]:
+    bullets: List[str] = []
+
+    coverage = metrics.get("coverage", 0.0)
+    avg_distance = metrics.get("avg_distance", 0.0)
+    balance = metrics.get("balance", 0.0)
+    low_battery_count = max(metrics.get("low_battery_count", 0), battery.get("low_battery_count", 0))
+    shortage_count = dispatch.get("shortage_count", 0)
+    total_distance = dispatch.get("total_distance_m", 0.0)
+
+    if coverage and coverage < 60:
+        bullets.append(f"当前覆盖率仅{coverage:.1f}%，偏低，建议优先补充停车点或调整当前方案。")
+    elif coverage and coverage < 75:
+        bullets.append(f"当前覆盖率为{coverage:.1f}%，总体可用，但仍应关注覆盖薄弱区域。")
+
+    if avg_distance and avg_distance > 260:
+        bullets.append(f"平均步行距离约{round(avg_distance)}米，偏长，可能影响取还车便利性。")
+
+    if balance and balance < 60:
+        bullets.append(f"当前负载均衡度约{balance:.0f}，部分停车点可能存在过载或闲置。")
+
+    if shortage_count >= 3:
+        bullets.append(f"当前存在{shortage_count}个缺口点，建议优先处理连续缺车区域。")
+    elif shortage_count > 0:
+        bullets.append(f"当前仍有{shortage_count}个缺口点，建议保持短周期调度。")
+
+    if total_distance and total_distance > 2500:
+        bullets.append(f"本轮调度总距离约{round(total_distance)}米，调度成本偏高，后续可优化路径组织。")
+
+    if low_battery_count >= 10:
+        bullets.append(f"当前低电量车辆较多（{low_battery_count}辆），需同步安排换电运维。")
+    elif low_battery_count > 0:
+        bullets.append(f"当前有{low_battery_count}辆低电量车辆，建议结合调度任务分批处理。")
+
+    if compare:
+        rec = compare.get("recommended_scheme", "none")
+        if rec == "smart":
+            bullets.append("当前推荐方案为智能方案，建议以其为主，再针对局部点位做人工微调。")
+        elif rec == "manual":
+            bullets.append("当前推荐方案为人工方案，说明现有人工布局在当前权衡目标下更占优。")
+
+    if not bullets:
+        bullets.append("当前未发现明显高风险项，建议继续观察选址、调度与运维指标变化。")
+
+    return bullets[:5]
+
+
+# def generate_compare_report(payload: Dict[str, Any]) -> Dict[str, Any]:
+#     compare = _extract_compare(payload)
+#     smart = compare["smart"]
+#     manual = compare["manual"]
+#     recommended = compare["recommended_scheme"]
+
+#     if not (smart["coverage"] or manual["coverage"] or smart["avg_distance"] or manual["avg_distance"]):
+#         return {"text": "当前未获取到可对比的方案指标，请先完成智能选址与人工选址。"}
+
+#     parts: List[str] = []
+
+#     if recommended in ("smart", "manual"):
+#         parts.append(f"当前更推荐{_scheme_name(recommended)}。")
+#     else:
+#         parts.append("当前两种方案尚未形成明确推荐结论。")
+
+#     if smart["coverage"] != manual["coverage"]:
+#         better = "智能方案" if smart["coverage"] > manual["coverage"] else "人工方案"
+#         parts.append(f"{better}在覆盖率上更优（智能{smart['coverage']:.1f}%，人工{manual['coverage']:.1f}%）。")
+
+#     if smart["avg_distance"] != manual["avg_distance"]:
+#         better = "智能方案" if smart["avg_distance"] < manual["avg_distance"] else "人工方案"
+#         parts.append(f"{better}在步行距离上更有优势（智能{round(smart['avg_distance'])}米，人工{round(manual['avg_distance'])}米）。")
+
+#     if smart["balance"] != manual["balance"]:
+#         better = "智能方案" if smart["balance"] > manual["balance"] else "人工方案"
+#         parts.append(f"{better}的负载均衡性更好（智能{smart['balance']:.0f}，人工{manual['balance']:.0f}）。")
+
+#     if recommended == "smart":
+#         parts.append("建议以智能方案为主，并重点检查局部高压区域是否需要人工微调。")
+#     elif recommended == "manual":
+#         parts.append("建议保留人工方案，同时参考智能方案补足覆盖薄弱点。")
+#     else:
+#         parts.append("建议根据当前管理目标进一步明确偏好后再定稿。")
+
+#     return {"text": " ".join(parts)[:180]}
 
 def generate_compare_report(payload: Dict[str, Any]) -> Dict[str, Any]:
-    role = _normalize_role(payload.get("role"))
-    compare = payload.get("compare") or payload
-    smart = compare.get("smart") or {}
-    manual = compare.get("manual") or {}
-    best = _best_scheme_name(compare)
+    compare = _extract_compare(payload)
+    smart = compare["smart"]
+    manual = compare["manual"]
+    recommended = compare["recommended_scheme"]
 
-    text = (
-        f"{_scheme_metric_sentence('智能方案', smart)}"
-        f"{_scheme_metric_sentence('人工方案', manual)}"
-        f"综合当前指标，建议优先采用{best}。"
-    )
+    if not (smart["coverage"] or manual["coverage"] or smart["avg_distance"] or manual["avg_distance"]):
+        return {"text": "当前未获取到可对比的方案指标，请先完成智能选址与人工选址。"}
 
-    if best == "智能方案":
-        advice = "可将智能方案作为主方案，再结合人工经验微调局部点位。"
+    parts: List[str] = []
+
+    if recommended in ("smart", "manual"):
+        parts.append(f"当前更推荐{_scheme_name(recommended)}。")
     else:
-        advice = "人工方案在当前权衡下更贴近管理需求，但建议继续参考智能方案的覆盖优势。"
+        parts.append("当前两种方案尚未形成明确推荐结论。")
 
-    if role == "dispatcher":
-        advice = "调度员可优先关注当前推荐方案对应的缺车点与主要调度路线。"
+    coverage_diff = abs(smart["coverage"] - manual["coverage"])
+    if coverage_diff >= 0.5:
+        better = "智能方案" if smart["coverage"] > manual["coverage"] else "人工方案"
+        parts.append(
+            f"{better}在覆盖率上更优（智能{smart['coverage']:.1f}%，人工{manual['coverage']:.1f}%）。"
+        )
+    elif smart["coverage"] or manual["coverage"]:
+        parts.append(
+            f"两种方案的覆盖率接近（智能{smart['coverage']:.1f}%，人工{manual['coverage']:.1f}%）。"
+        )
 
-    return {
-        "module": "compare",
-        "title": "方案对比简报",
-        "text": text + advice,
-        "recommended_scheme": best,
-        "role_tip": ROLE_TIPS[role],
-    }
+    distance_diff = abs(smart["avg_distance"] - manual["avg_distance"])
+    if distance_diff >= 5:
+        better = "智能方案" if smart["avg_distance"] < manual["avg_distance"] else "人工方案"
+        parts.append(
+            f"{better}在步行距离上更有优势（智能{round(smart['avg_distance'])}米，人工{round(manual['avg_distance'])}米）。"
+        )
+    elif smart["avg_distance"] or manual["avg_distance"]:
+        parts.append(
+            f"两种方案的步行距离接近（智能{round(smart['avg_distance'])}米，人工{round(manual['avg_distance'])}米）。"
+        )
+
+    balance_diff = abs(smart["balance"] - manual["balance"])
+    if balance_diff >= 1:
+        better = "智能方案" if smart["balance"] > manual["balance"] else "人工方案"
+        parts.append(
+            f"{better}的负载均衡性更好（智能{smart['balance']:.0f}，人工{manual['balance']:.0f}）。"
+        )
+    elif smart["balance"] or manual["balance"]:
+        parts.append(
+            f"两种方案的负载均衡性接近（智能{smart['balance']:.0f}，人工{manual['balance']:.0f}）。"
+        )
+
+    if recommended == "smart":
+        parts.append("建议以智能方案为主，并重点检查局部高压区域是否需要人工微调。")
+    elif recommended == "manual":
+        parts.append("建议保留人工方案，同时参考智能方案补足覆盖薄弱点。")
+    else:
+        parts.append("建议根据当前管理目标进一步明确偏好后再定稿。")
+
+    return {"text": " ".join(parts)[:180]}
 
 
 def generate_dispatch_priority(payload: Dict[str, Any]) -> Dict[str, Any]:
-    role = _normalize_role(payload.get("role"))
-    dispatch = payload.get("dispatch") or payload
-    items = _top_dispatch_items(dispatch)
-    bullets = [_build_priority_text(item, idx + 1, role) for idx, item in enumerate(items)]
-    if not bullets:
-        bullets = ["当前暂无可执行调度任务，建议先运行调度优化。"]
+    dispatch = _extract_dispatch(payload)
+    routes = dispatch["routes"]
+    if not routes:
+        return {"bullets": ["当前未获取到调度路线，请先运行动态调度模块。"]}
 
-    summary = "当前调度建议已按紧急程度排序，可直接作为待办清单参考。"
-    if role == "dispatcher":
-        summary = "以下为推荐的执行顺序，建议按列表从上到下依次处理。"
+    ranked = _rank_routes(dispatch)
+    bullets: List[str] = []
+    for idx, route in enumerate(ranked[:4]):
+        bullets.append(
+            f"优先级{idx + 1}：处理“{route['from']}→{route['to']}”，转运{route['transfer']}辆，缺口{route['shortage']}辆，路线约{round(route['distance_m'])}米。"
+        )
 
-    return {
-        "module": "priority",
-        "title": "调度待办清单",
-        "summary": summary,
-        "bullets": bullets,
-        "role_tip": ROLE_TIPS[role],
-    }
+    total_distance = dispatch.get("total_distance_m", 0.0)
+    if total_distance > 0:
+        bullets.append(f"本轮调度总距离约{round(total_distance)}米，建议优先完成高缺口、短路径任务。")
+
+    return {"bullets": bullets[:5]}
 
 
 def generate_risk_alerts(payload: Dict[str, Any]) -> Dict[str, Any]:
-    role = _normalize_role(payload.get("role"))
-    risks = _risk_items(payload)
-    bullets = [f"[{PRIORITY_LABELS.get(item['level'], '中')}] {item['text']}" for item in risks]
-    return {
-        "module": "risk",
-        "title": "风险预警",
-        "summary": "系统已基于当前指标自动识别重点风险。",
-        "bullets": bullets,
-        "role_tip": ROLE_TIPS[role],
-    }
+    metrics = _extract_metrics(payload)
+    dispatch = _extract_dispatch(payload)
+    battery = _extract_battery(payload)
+    compare = _extract_compare(payload) if payload.get("compare") else None
+    return {"bullets": _risk_bullets(metrics, dispatch, battery, compare)}
 
 
 def generate_decision_answer(payload: Dict[str, Any]) -> Dict[str, Any]:
-    role = _normalize_role(payload.get("role"))
-    preference = str(payload.get("preference") or "coverage").strip().lower()
-    compare = payload.get("compare") or {}
-    dispatch = payload.get("dispatch") or {}
-    battery = payload.get("battery") or {}
+    role = _safe_text(payload.get("role"), "admin")
+    preference = _safe_text(payload.get("preference"), "coverage")
+    compare = _extract_compare(payload) if payload.get("compare") else None
+    dispatch = _extract_dispatch(payload)
+    battery = _extract_battery(payload)
 
-    best_scheme = _best_scheme_name(compare)
-    preference_text = PREFERENCE_TEXT.get(preference, "优先覆盖率")
+    pref_name = {
+        "coverage": "优先覆盖率",
+        "cost": "优先降低调度成本",
+        "balance": "优先负载均衡",
+        "speed": "优先快速缓解缺车",
+    }.get(preference, "当前偏好")
 
-    if preference == "coverage":
-        answer = f"当前更适合选择{best_scheme}，因为它在覆盖率维度更占优，能优先缓解取车不便问题。"
-    elif preference == "cost":
-        distance = _safe_float((dispatch.get('summary') or {}).get('total_distance_m') or dispatch.get('total_distance_m'))
-        answer = f"当前建议优先降低调度成本，先处理高缺口且距离较短的任务。当前总调度距离约{distance:.0f}米。"
-    elif preference == "balance":
-        answer = "当前建议优先关注负载均衡，避免个别停车点长期堆积或长期缺车。"
+    lines: List[str] = [f'在“{pref_name}”这一偏好下，建议如下：']
+
+    if preference in ("coverage", "balance", "cost") and compare:
+        smart = compare["smart"]
+        manual = compare["manual"]
+        recommended = compare.get("recommended_scheme", "none")
+
+        coverage_diff = abs(smart["coverage"] - manual["coverage"])
+        distance_diff = abs(smart["avg_distance"] - manual["avg_distance"])
+        balance_diff = abs(smart["balance"] - manual["balance"])
+
+        if preference == "coverage":
+            if coverage_diff < 0.5:
+                if recommended in ("smart", "manual"):
+                    lines.append(
+                        f"从当前偏好看，两种方案覆盖率接近（智能{smart['coverage']:.1f}% vs 人工{manual['coverage']:.1f}%）。"
+                        f"由于差异不明显，建议优先参考当前推荐的{_scheme_name(recommended)}。"
+                    )
+                else:
+                    lines.append(
+                        f"从当前偏好看，两种方案覆盖率接近（智能{smart['coverage']:.1f}% vs 人工{manual['coverage']:.1f}%）。"
+                        "由于差异不明显，建议结合现场需求进一步判断。"
+                    )
+            elif smart["coverage"] > manual["coverage"]:
+                lines.append(
+                    f"方案选择上，建议优先采用智能方案，因为智能方案覆盖率更高（{smart['coverage']:.1f}% vs {manual['coverage']:.1f}%）。"
+                )
+            else:
+                lines.append(
+                    f"方案选择上，建议优先采用人工方案，因为人工方案覆盖率更高（{manual['coverage']:.1f}% vs {smart['coverage']:.1f}%）。"
+                )
+
+            lines.append("执行上应先稳住覆盖薄弱区域，再决定是否压缩边缘冗余点。")
+
+        elif preference == "balance":
+            if balance_diff < 1:
+                if recommended in ("smart", "manual"):
+                    lines.append(
+                        f"从当前偏好看，两种方案负载均衡性接近（智能{smart['balance']:.0f} vs 人工{manual['balance']:.0f}）。"
+                        f"由于差异不明显，建议优先参考当前推荐的{_scheme_name(recommended)}。"
+                    )
+                else:
+                    lines.append(
+                        f"从当前偏好看，两种方案负载均衡性接近（智能{smart['balance']:.0f} vs 人工{manual['balance']:.0f}）。"
+                        "由于差异不明显，建议结合现场需求进一步判断。"
+                    )
+            elif smart["balance"] > manual["balance"]:
+                lines.append(
+                    f"方案选择上，建议优先采用智能方案，因为智能方案负载均衡性更好（{smart['balance']:.0f} vs {manual['balance']:.0f}）。"
+                )
+            else:
+                lines.append(
+                    f"方案选择上，建议优先采用人工方案，因为人工方案负载均衡性更好（{manual['balance']:.0f} vs {smart['balance']:.0f}）。"
+                )
+
+            lines.append("执行上应优先调整高压停车点周边的容量分配，避免局部堆积。")
+
+        elif preference == "cost":
+            if distance_diff < 5:
+                if recommended in ("smart", "manual"):
+                    lines.append(
+                        f"从当前偏好看，两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                        f"由于差异不明显，建议优先参考当前推荐的{_scheme_name(recommended)}。"
+                    )
+                else:
+                    lines.append(
+                        f"从当前偏好看，两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                        "由于差异不明显，建议结合覆盖率、均衡性和现场需求再决定。"
+                    )
+            elif smart["avg_distance"] < manual["avg_distance"]:
+                lines.append(
+                    f"方案选择上，建议优先采用智能方案，因为智能方案平均步行距离更短（{round(smart['avg_distance'])}米 vs {round(manual['avg_distance'])}米）。"
+                )
+            else:
+                lines.append(
+                    f"方案选择上，建议优先采用人工方案，因为人工方案平均步行距离更短（{round(manual['avg_distance'])}米 vs {round(smart['avg_distance'])}米）。"
+                )
+
+            lines.append("若当前目标是降低成本，应优先选择路径更紧凑、后续调度压力更小的方案。")
+
     elif preference == "speed":
-        answer = "当前建议优先快速缓解缺车，先处理宿舍区、教学楼周边等高频需求点。"
-    else:
-        answer = f"当前建议以{preference_text}为主，结合方案指标与调度结果综合判断。"
+        if dispatch.get("routes"):
+            lines.append(_top_route_sentence(dispatch))
+            if dispatch.get("shortage_count", 0) > 0:
+                lines.append(f"当前共有{dispatch['shortage_count']}个缺口点，应先处理缺口最大的线路，再处理次级线路。")
+            else:
+                ranked = _rank_routes(dispatch)
+                if ranked:
+                    top = ranked[0]
+                    lines.append(f"可先执行“{top['from']}→{top['to']}”，因为其转运量为{top['transfer']}辆，最适合快速见效。")
+        else:
+            lines.append("当前还没有调度结果，建议先运行动态调度后再生成快速缓解建议。")
 
-    battery_count = _safe_int(battery.get("low_battery_count"))
-    if battery_count > 0:
-        answer += f" 另外当前还有{battery_count}辆低电量车辆，需同步关注运维安排。"
+    else:
+        if dispatch.get("routes"):
+            lines.append(_top_route_sentence(dispatch))
+        else:
+            lines.append("当前可用数据不足，建议先运行选址或调度模块后再生成决策建议。")
+
+    low_battery_count = battery.get("low_battery_count", 0)
+    if low_battery_count > 0:
+        if low_battery_count >= 10:
+            lines.append(f"同时需关注{low_battery_count}辆低电量车辆，避免选址和调度优化后因低电量造成可用运力下降。")
+        else:
+            lines.append(f"当前有{low_battery_count}辆低电量车辆，可并行安排换电，不必单独作为首要矛盾。")
 
     if role == "dispatcher":
-        answer += " 调度员执行时应优先关注系统已生成的任务顺序。"
+        lines.append("调度员执行时应优先处理系统已标记的高优先级任务，不建议临时改动整体方案。")
+    else:
+        lines.append("管理员可在当前建议基础上结合现场情况做小范围人工调整。")
 
-    return {
-        "module": "decision",
-        "title": "决策问答",
-        "text": answer,
-        "preference": preference,
-        "role_tip": ROLE_TIPS[role],
-    }
+    return {"text": " ".join(lines)[:260]}
 
 
-def _detect_intent(question: str, context: Dict[str, Any]) -> str:
-    q = (question or "").strip().lower()
-    page = str((context or {}).get("page") or "").strip().lower()
+def _answer_known_question(question: str, context: Dict[str, Any]) -> Optional[str]:
+    q = question.lower()
+    compare = _extract_compare({"compare": context.get("compare")}) if context.get("compare") else None
+    dispatch = _extract_dispatch({"dispatch": context.get("dispatch")})
+    metrics = _extract_metrics({"metrics": context.get("metrics")})
+    battery = _extract_battery({"battery": context.get("battery")})
 
-    if any(k in q for k in ["风险", "预警", "异常"]):
-        return "risk"
-    if any(k in q for k in ["优先", "待办", "先处理", "任务"]):
-        return "priority"
-    if any(k in q for k in ["方案", "智能", "人工", "选址", "对比"]):
-        return "compare"
-    if any(k in q for k in ["覆盖率", "成本", "均衡", "负载", "偏好"]):
-        return "decision"
-    if page in {"location", "compare"}:
-        return "compare"
-    if page in {"dispatch", "task"}:
-        return "priority"
-    return "decision"
+    if any(k in q for k in ["推荐", "哪套", "选哪", "方案", "智能还是人工"]):
+        if compare:
+            smart = compare["smart"]
+            manual = compare["manual"]
+            recommended = compare.get("recommended_scheme", "none")
+            preference = context.get("preference", "coverage")
+
+            coverage_diff = abs(smart["coverage"] - manual["coverage"])
+            distance_diff = abs(smart["avg_distance"] - manual["avg_distance"])
+            balance_diff = abs(smart["balance"] - manual["balance"])
+
+            if preference == "coverage":
+                if coverage_diff < 0.5:
+                    if recommended in ("smart", "manual"):
+                        return (
+                            f"两种方案覆盖率接近（智能{smart['coverage']:.1f}% vs 人工{manual['coverage']:.1f}%）。"
+                            f"当前差异不明显，建议优先参考系统当前推荐的{_scheme_name(recommended)}。"
+                        )
+                    return (
+                        f"两种方案覆盖率接近（智能{smart['coverage']:.1f}% vs 人工{manual['coverage']:.1f}%）。"
+                        "当前差异不明显，建议结合现场需求进一步判断。"
+                    )
+                if smart["coverage"] > manual["coverage"]:
+                    return f"当前更建议采用智能方案，主要原因是智能方案覆盖率更高（{smart['coverage']:.1f}% vs {manual['coverage']:.1f}%）。"
+                return f"当前更建议采用人工方案，主要原因是人工方案覆盖率更高（{manual['coverage']:.1f}% vs {smart['coverage']:.1f}%）。"
+
+            if preference == "balance":
+                if balance_diff < 1:
+                    if recommended in ("smart", "manual"):
+                        return (
+                            f"两种方案负载均衡性接近（智能{smart['balance']:.0f} vs 人工{manual['balance']:.0f}）。"
+                            f"当前差异不明显，建议优先参考系统当前推荐的{_scheme_name(recommended)}。"
+                        )
+                    return (
+                        f"两种方案负载均衡性接近（智能{smart['balance']:.0f} vs 人工{manual['balance']:.0f}）。"
+                        "当前差异不明显，建议结合现场需求进一步判断。"
+                    )
+                if smart["balance"] > manual["balance"]:
+                    return f"当前更建议采用智能方案，主要原因是智能方案负载均衡性更好（{smart['balance']:.0f} vs {manual['balance']:.0f}）。"
+                return f"当前更建议采用人工方案，主要原因是人工方案负载均衡性更好（{manual['balance']:.0f} vs {smart['balance']:.0f}）。"
+
+            # 默认按成本/距离偏好解释
+            if distance_diff < 5:
+                if recommended in ("smart", "manual"):
+                    return (
+                        f"两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                        f"当前差异不明显，建议优先参考系统当前推荐的{_scheme_name(recommended)}。"
+                    )
+                return (
+                    f"两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                    "当前差异不明显，建议结合覆盖率、均衡性和现场需求进一步判断。"
+                )
+            if smart["avg_distance"] < manual["avg_distance"]:
+                return f"当前更建议采用智能方案，主要原因是智能方案平均步行距离更短（{round(smart['avg_distance'])}米 vs {round(manual['avg_distance'])}米）。"
+            return f"当前更建议采用人工方案，主要原因是人工方案平均步行距离更短（{round(manual['avg_distance'])}米 vs {round(smart['avg_distance'])}米）。"
+        return "当前缺少方案对比数据，建议先完成智能选址和人工选址。"
+
+    if any(k in q for k in ["先处理", "优先处理", "先做什么", "待办", "调度任务"]):
+        if dispatch.get("routes"):
+            return _top_route_sentence(dispatch)
+        return "当前还没有调度结果，建议先运行动态调度模块。"
+
+    if any(k in q for k in ["风险", "预警", "问题", "隐患"]):
+        bullets = _risk_bullets(metrics, dispatch, battery, compare)
+        return "；".join(bullets[:3])
+
+    if any(k in q for k in ["低电量", "换电", "电池"]):
+        count = battery.get("low_battery_count", 0)
+        if count <= 0:
+            return "当前未检测到明显的低电量车辆问题，暂无需优先安排换电运维。"
+        route_count = battery.get("route_count", 0)
+        cap = battery.get("capacity_per_trip", 0)
+        return f"当前共有{count}辆低电量车辆，已规划{route_count}条换电路线，单次容量为{cap}。建议优先完成已分配的换电任务。"
+
+    if any(k in q for k in ["覆盖率", "覆盖"]):
+        coverage = metrics.get("coverage", 0.0)
+        if coverage > 0:
+            return f"当前有效方案覆盖率约为{coverage:.1f}%。若你更看重覆盖范围，建议优先保留覆盖率更高的方案。"
+        return "当前尚未形成可解释的覆盖率结果，请先运行选址模块。"
+
+    if any(k in q for k in ["成本", "距离", "路程"]):
+        if dispatch.get("total_distance_m", 0) > 0:
+            return f"当前调度总距离约{round(dispatch['total_distance_m'])}米。若要压低成本，应优先完成短路径且高缺口任务。"
+        if compare:
+            smart = compare["smart"]
+            manual = compare["manual"]
+            recommended = compare.get("recommended_scheme", "none")
+            distance_diff = abs(smart["avg_distance"] - manual["avg_distance"])
+
+            if distance_diff < 5:
+                if recommended in ("smart", "manual"):
+                    return (
+                        f"两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                        f"若以成本为先，建议优先参考系统当前推荐的{_scheme_name(recommended)}。"
+                    )
+                return (
+                    f"两种方案平均步行距离接近（智能{round(smart['avg_distance'])}米 vs 人工{round(manual['avg_distance'])}米）。"
+                    "若以成本为先，建议再结合覆盖率和均衡性综合判断。"
+                )
+
+            if smart["avg_distance"] < manual["avg_distance"]:
+                return f"若以成本为先，更建议采用智能方案，因为智能方案平均步行距离更短（{round(smart['avg_distance'])}米 vs {round(manual['avg_distance'])}米）。"
+            return f"若以成本为先，更建议采用人工方案，因为人工方案平均步行距离更短（{round(manual['avg_distance'])}米 vs {round(smart['avg_distance'])}米）。"
+
+        return "当前还没有足够的成本相关结果，建议先运行选址或调度模块。"
+
+    if any(k in q for k in ["均衡", "负载"]):
+        balance = metrics.get("balance", 0.0)
+        if balance > 0:
+            return f"当前负载均衡度约为{balance:.0f}。若该值偏低，说明部分点位压力集中，建议优先做局部调平。"
+        return "当前缺少负载均衡结果，建议先运行选址模块。"
+
+    return None
 
 
 def generate_chat_response(payload: Dict[str, Any]) -> Dict[str, Any]:
-    role = _normalize_role(payload.get("role"))
-    question = str(payload.get("question") or "").strip()
+    role = _safe_text(payload.get("role"), "admin")
+    question = _safe_text(payload.get("question"))
     context = payload.get("context") or {}
-    merged: Dict[str, Any] = {**context, "role": role}
-    intent = _detect_intent(question, context)
 
-    if intent == "compare":
-        result = generate_compare_report(merged)
-        answer = result["text"]
-    elif intent == "priority":
-        result = generate_dispatch_priority(merged)
-        answer = result["summary"] + " " + " ".join(result["bullets"][:3])
-    elif intent == "risk":
-        result = generate_risk_alerts(merged)
-        answer = "；".join(result["bullets"][:3])
-    else:
-        pref = str(context.get("preference") or "coverage")
-        result = generate_decision_answer({**merged, "preference": pref})
-        answer = result["text"]
+    if not question:
+        return {"answer": "请输入与选址、调度、电池运维或风险预警相关的问题。"}
 
+    answer = _answer_known_question(question, context)
+    if answer:
+        return {"answer": answer}
+
+    role_name = _get_role_name(role)
+    page = _safe_text((context.get("page") if isinstance(context, dict) else ""), "dashboard")
     return {
-        "module": "chat",
-        "title": "智能辅助问答",
-        "intent": intent,
-        "question": question,
-        "answer": answer,
-        "role_tip": ROLE_TIPS[role],
+        "answer": f"当前为{role_name}视图，问题已超出本模块的受限问答范围。请围绕当前页面（{page}）的方案解释、调度优先级、风险预警或电池运维提问。"
     }

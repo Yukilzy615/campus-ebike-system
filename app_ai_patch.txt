@@ -1,0 +1,39 @@
+在 app.py 中做最小修改：
+
+1. 导入：
+from algorithms.ai_assistant import (
+    generate_compare_report,
+    generate_dispatch_priority,
+    generate_risk_alerts,
+    generate_decision_answer,
+    generate_chat_response,
+)
+
+2. 在现有接口后追加：
+
+@app.route('/api/ai/compare-report', methods=['POST'])
+def ai_compare_report():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_compare_report(data))
+
+@app.route('/api/ai/priority', methods=['POST'])
+def ai_priority():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_dispatch_priority(data))
+
+@app.route('/api/ai/risk', methods=['POST'])
+def ai_risk():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_risk_alerts(data))
+
+@app.route('/api/ai/decision', methods=['POST'])
+def ai_decision():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_decision_answer(data))
+
+@app.route('/api/ai/chat', methods=['POST'])
+def ai_chat():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_chat_response(data))
+
+3. 将文件放入：algorithms/ai_assistant.py

@@ -302,6 +302,8 @@ let currentDispatchScheme = '待选择';
 
 let latestSmartLocationResult = null;
 
+let latestDispatchResult = null;
+
 let savedPredictionData = null;
 
 let currentPOIData = null;
@@ -322,11 +324,13 @@ let lowBatteryMarkers = [];
 let currentLowBatteryList = [];
 let batteryRouteAssignments = {};
 let batteryLastRouteResult = null;
+let aiPanelSessionToken = 0;
 
 const BATTERY_ROUTE_COLORS = ['#28a745', '#1a73e8', '#fb8c00', '#8e24aa', '#00acc1', '#d81b60'];
 const BATTERY_DEFAULT_CAPACITY = 6;
 const BATTERY_STATE_STORAGE_KEY = 'battery_ops_state_v1';
 const BATTERY_ARROW_ROTATION_OFFSET = 90;
+const AI_RESULT_FALLBACK_TEXT = '当前未获取到分析结果，请先运行相关模块或稍后重试';
 
 let dispatcherSelectedVehicleKey = '';
 
@@ -6218,6 +6222,8 @@ function runDispatch() {
 
     const dispatchResult = generateDispatchRoutes(parkingPoints, timeSlot);
 
+    latestDispatchResult = dispatchResult;
+
 
 
     
@@ -6968,6 +6974,7 @@ function handleLogin() {
 
         // 每次新登录都清空上一次电池运维遗留状态，避免页面残留
         resetBatteryOpsStateForNewLogin();
+        resetAIPanelStateForNewLogin();
 
         applyRolePermissions();
 
@@ -7104,6 +7111,8 @@ function handleRegister() {
 
 
 function handleLogout() {
+
+    resetAIPanelStateForNewLogin();
 
 
 
@@ -7604,6 +7613,7 @@ function applyRolePermissions() {
     }
 
     updateBatteryOperationButtons();
+    updateAIRoleView();
 }
 
 
@@ -8337,31 +8347,427 @@ function toggleAIDialog() {
     }
 }
 
-// 生成AI对比分析简报
-function generateAIReport() {
-    const reportCard = document.getElementById('ai-report-card');
-    const reportContent = document.getElementById('ai-report-content');
-    
-    if (reportCard && reportContent) {
-        reportContent.textContent = 'AI分析结果：\n\n基于智能选址和人工选址方案的对比，智能选址方案在覆盖率和均衡性方面表现更优。建议采用智能选址方案作为基础，结合人工经验进行微调。';
-        reportCard.style.display = 'block';
+function toCoveragePercent(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+        return 0;
+    }
+    return num <= 1 ? num * 100 : num;
+}
+
+function getCurrentModuleForAI() {
+    const activeMenu = document.querySelector('.menu-item.active');
+    return activeMenu?.getAttribute('data-module') || 'dashboard';
+}
+
+function getComparePayloadForAI() {
+    const analysis = getComparisonAnalysis();
+    const smart = analysis?.smartMetrics;
+    const manual = analysis?.manualMetrics;
+    if (!smart || !manual) {
+        return null;
+    }
+
+    return {
+        smart: {
+            coverage: toCoveragePercent(smart.coverage),
+            avg_distance: Number(smart.avg_distance) || 0,
+            balance: Number(smart.balance) || 0,
+            capacity: Number(smart.capacity) || 0
+        },
+        manual: {
+            coverage: toCoveragePercent(manual.coverage),
+            avg_distance: Number(manual.avg_distance) || 0,
+            balance: Number(manual.balance) || 0,
+            capacity: Number(manual.capacity) || 0
+        },
+        recommended_scheme: analysis.recommendedScheme || 'none'
+    };
+}
+
+function getMetricsPayloadForAI() {
+    const metrics = getSchemeMetricsByType(getEffectiveScheme()) || {};
+    return {
+        coverage: toCoveragePercent(metrics.coverage),
+        avg_distance: Number(metrics.avg_distance) || 0,
+        balance: Number(metrics.balance) || 0,
+        low_battery_count: Array.isArray(currentLowBatteryList) ? currentLowBatteryList.length : 0
+    };
+}
+
+function extractDispatchRoutesForAI() {
+    const features = Array.isArray(latestDispatchResult?.features) ? latestDispatchResult.features : [];
+    return features
+        .filter(f => f?.geometry?.type === 'LineString')
+        .map((feature, idx) => {
+            const props = feature.properties || {};
+            return {
+                name: props.route_name || `路线${idx + 1}`,
+                from: props.from || '供应点',
+                to: props.to || '需求点',
+                transfer: Number(props.amount || props.transfer || 0) || 0,
+                shortage: Number(props.shortage || 0) || 0,
+                distance_m: Number(props.total_distance_m || props.distance_m || props.distance || 0) || 0
+            };
+        });
+}
+
+function estimateDispatchShortageCount() {
+    const rows = document.querySelectorAll('#supply-demand-body tr');
+    if (!rows.length) {
+        return 0;
+    }
+
+    let shortageCount = 0;
+    rows.forEach(row => {
+        const statusCell = row.cells?.[3];
+        if (statusCell && statusCell.textContent.includes('不足')) {
+            shortageCount += 1;
+        }
+    });
+    return shortageCount;
+}
+
+function getDispatchPayloadForAI() {
+    const routes = extractDispatchRoutesForAI();
+    const payload = {
+        routes: routes
+    };
+
+    const totalDistance = routes.reduce((sum, route) => sum + (Number(route.distance_m) || 0), 0);
+    if (totalDistance > 0) {
+        payload.total_distance_m = totalDistance;
+    }
+
+    const shortageCount = estimateDispatchShortageCount();
+    if (shortageCount > 0) {
+        payload.shortage_count = shortageCount;
+    }
+
+    return payload;
+}
+
+function getBatteryPayloadForAI() {
+    const lowBatteryCount = Array.isArray(currentLowBatteryList) ? currentLowBatteryList.length : 0;
+    if (!lowBatteryCount && !batteryLastRouteResult) {
+        return null;
+    }
+
+    return {
+        low_battery_count: lowBatteryCount,
+        route_count: Number(batteryLastRouteResult?.route_count || 0) || 0,
+        capacity_per_trip: Number(batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue()) || 0
+    };
+}
+
+function setTextResult(cardId, contentId, text) {
+    const card = document.getElementById(cardId);
+    const content = document.getElementById(contentId);
+    if (card && content) {
+        content.textContent = text;
+        card.style.display = 'block';
     }
 }
 
-// 生成AI调度优先级建议
-function generateAIPriority() {
-    const priorityCard = document.getElementById('ai-priority-card');
-    const priorityList = document.getElementById('ai-priority-list');
-    
-    if (priorityCard && priorityList) {
-        priorityList.innerHTML = `
-            <li>1. 学生宿舍区 - 早高峰需求高</li>
-            <li>2. 教学楼区域 - 上课时间需求集中</li>
-            <li>3. 食堂周边 - 用餐时间需求大</li>
-            <li>4. 图书馆附近 - 学习时间需求稳定</li>
-        `;
-        priorityCard.style.display = 'block';
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderCompareReport(result) {
+    const card = document.getElementById('ai-report-card');
+    const content = document.getElementById('ai-report-content');
+    if (!card || !content) {
+        return;
     }
+
+    const rawText = String(result?.text || AI_RESULT_FALLBACK_TEXT).trim();
+    const recommended = String(result?.recommended_scheme || '待评估').trim();
+    const sentences = rawText
+        .split(/[。！？!?]/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .slice(0, 6);
+
+    if (!sentences.length) {
+        content.textContent = AI_RESULT_FALLBACK_TEXT;
+        card.style.display = 'block';
+        return;
+    }
+
+    const summaryHtml = `<div class="ai-report-summary">推荐方案：<strong>${escapeHtml(recommended)}</strong></div>`;
+    const listHtml = `<ul class="ai-report-list">${sentences
+        .map(item => `<li>${escapeHtml(item)}。</li>`)
+        .join('')}</ul>`;
+
+    content.innerHTML = summaryHtml + listHtml;
+    card.style.display = 'block';
+}
+
+function renderAIList(cardId, listId, items) {
+    const card = document.getElementById(cardId);
+    const list = document.getElementById(listId);
+    if (!card || !list) {
+        return;
+    }
+
+    list.innerHTML = '';
+    const bullets = Array.isArray(items) ? items : [];
+    if (!bullets.length) {
+        const emptyItem = document.createElement('li');
+        emptyItem.textContent = AI_RESULT_FALLBACK_TEXT;
+        list.appendChild(emptyItem);
+    } else {
+        bullets.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = String(item);
+            list.appendChild(li);
+        });
+    }
+    card.style.display = 'block';
+}
+
+async function postAIData(endpoint, payload) {
+    const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
+
+    return response.json();
+}
+
+function updateAIRoleView() {
+    const roleFocus = document.getElementById('ai-role-focus');
+    const compareInstruction = document.getElementById('ai-compare-instruction');
+    const isAdmin = currentUserRole === 'admin';
+
+    if (roleFocus) {
+        roleFocus.textContent = isAdmin
+            ? '当前重点：方案解释、调度待办、风险预警、决策问答。'
+            : '当前重点：调度待办、风险提示、受限问答。';
+    }
+
+    if (compareInstruction) {
+        compareInstruction.textContent = isAdmin
+            ? '对比智能选址与人工选址指标，生成当前推荐方案解释。'
+            : '仅供查看当前推荐方案解释。';
+    }
+}
+
+function isAIPanelSessionStale(requestToken) {
+    return requestToken !== aiPanelSessionToken;
+}
+
+async function generateAIReport() {
+    const requestToken = aiPanelSessionToken;
+    const compare = getComparePayloadForAI();
+    if (!compare) {
+        showToast('请先运行智能选址和人工选址后再生成方案解释');
+        setTextResult('ai-report-card', 'ai-report-content', AI_RESULT_FALLBACK_TEXT);
+        return;
+    }
+
+    try {
+        const result = await postAIData('/api/ai/compare-report', {
+            role: currentUserRole,
+            compare: compare
+        });
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        renderCompareReport(result);
+    } catch (error) {
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        console.error('生成方案解释失败:', error);
+        setTextResult('ai-report-card', 'ai-report-content', AI_RESULT_FALLBACK_TEXT);
+    }
+}
+
+async function generateAIPriority() {
+    const requestToken = aiPanelSessionToken;
+    const dispatch = getDispatchPayloadForAI();
+    if (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0) {
+        showToast('请先运行调度优化后再生成调度待办');
+        renderAIList('ai-priority-card', 'ai-priority-list', [AI_RESULT_FALLBACK_TEXT]);
+        return;
+    }
+
+    try {
+        const result = await postAIData('/api/ai/priority', {
+            role: currentUserRole,
+            dispatch: dispatch
+        });
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        renderAIList('ai-priority-card', 'ai-priority-list', result.bullets || []);
+    } catch (error) {
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        console.error('生成调度待办失败:', error);
+        renderAIList('ai-priority-card', 'ai-priority-list', [AI_RESULT_FALLBACK_TEXT]);
+    }
+}
+
+async function generateAIRisk() {
+    const requestToken = aiPanelSessionToken;
+    const metrics = getMetricsPayloadForAI();
+    const dispatch = getDispatchPayloadForAI();
+    const battery = getBatteryPayloadForAI();
+    const compare = getComparePayloadForAI();
+
+    const hasMetrics = Number(metrics.coverage) > 0 || Number(metrics.avg_distance) > 0 || Number(metrics.balance) > 0;
+    const hasDispatch = Array.isArray(dispatch.routes) && dispatch.routes.length > 0;
+    const hasBattery = Number(metrics.low_battery_count) > 0;
+
+    if (!hasMetrics && !hasDispatch && !hasBattery) {
+        showToast('请先运行选址或调度模块后再生成风险提示');
+        renderAIList('ai-risk-card', 'ai-risk-list', [AI_RESULT_FALLBACK_TEXT]);
+        return;
+    }
+
+    try {
+        const result = await postAIData('/api/ai/risk', {
+            role: currentUserRole,
+            metrics: metrics,
+            dispatch: dispatch,
+            compare: compare || undefined,
+            battery: battery || undefined
+        });
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        renderAIList('ai-risk-card', 'ai-risk-list', result.bullets || []);
+    } catch (error) {
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        console.error('生成风险预警失败:', error);
+        renderAIList('ai-risk-card', 'ai-risk-list', [AI_RESULT_FALLBACK_TEXT]);
+    }
+}
+
+async function generateAIDecision() {
+    const requestToken = aiPanelSessionToken;
+    const preference = document.getElementById('ai-preference-select')?.value || 'coverage';
+    const compare = getComparePayloadForAI();
+    const dispatch = getDispatchPayloadForAI();
+    const battery = getBatteryPayloadForAI();
+
+    if (!compare && (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0)) {
+        showToast('请先运行相关模块后再生成决策建议');
+        setTextResult('ai-decision-card', 'ai-decision-content', AI_RESULT_FALLBACK_TEXT);
+        return;
+    }
+
+    try {
+        const result = await postAIData('/api/ai/decision', {
+            role: currentUserRole,
+            preference: preference,
+            compare: compare || undefined,
+            dispatch: dispatch,
+            battery: battery || undefined
+        });
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        setTextResult('ai-decision-card', 'ai-decision-content', result.text || AI_RESULT_FALLBACK_TEXT);
+    } catch (error) {
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        console.error('生成决策建议失败:', error);
+        setTextResult('ai-decision-card', 'ai-decision-content', AI_RESULT_FALLBACK_TEXT);
+    }
+}
+
+async function submitAIChat() {
+    const requestToken = aiPanelSessionToken;
+    const input = document.getElementById('ai-chat-question');
+    const question = String(input?.value || '').trim();
+    if (!question) {
+        showToast('请输入业务问题后再发送');
+        return;
+    }
+
+    const preference = document.getElementById('ai-preference-select')?.value || 'coverage';
+    const compare = getComparePayloadForAI();
+    const dispatch = getDispatchPayloadForAI();
+    const battery = getBatteryPayloadForAI();
+    const metrics = getMetricsPayloadForAI();
+
+    try {
+        const result = await postAIData('/api/ai/chat', {
+            role: currentUserRole,
+            question: question,
+            context: {
+                page: getCurrentModuleForAI(),
+                compare: compare || undefined,
+                dispatch: dispatch,
+                battery: battery || undefined,
+                metrics: metrics,
+                preference: preference
+            }
+        });
+
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+
+        const wrapper = document.getElementById('ai-chat-last');
+        const qEl = document.getElementById('ai-chat-last-q');
+        const aEl = document.getElementById('ai-chat-last-a');
+        if (wrapper && qEl && aEl) {
+            qEl.textContent = `问：${question}`;
+            aEl.textContent = `答：${result.answer || AI_RESULT_FALLBACK_TEXT}`;
+            wrapper.style.display = 'block';
+        }
+        if (input) {
+            input.value = '';
+        }
+    } catch (error) {
+        if (isAIPanelSessionStale(requestToken)) {
+            return;
+        }
+        console.error('受限问答失败:', error);
+        const wrapper = document.getElementById('ai-chat-last');
+        const qEl = document.getElementById('ai-chat-last-q');
+        const aEl = document.getElementById('ai-chat-last-a');
+        if (wrapper && qEl && aEl) {
+            qEl.textContent = `问：${question}`;
+            aEl.textContent = `答：${AI_RESULT_FALLBACK_TEXT}`;
+            wrapper.style.display = 'block';
+        }
+    }
+}
+
+function initAIPanelEvents() {
+    const input = document.getElementById('ai-chat-question');
+    if (!input || input.dataset.boundEnter === '1') {
+        return;
+    }
+
+    input.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            submitAIChat();
+        }
+    });
+    input.dataset.boundEnter = '1';
 }
 
 // 开始自定义截图（QQ/微信式区域截图）
@@ -9176,6 +9582,67 @@ function clearBatteryOpsPersistedState() {
         localStorage.removeItem(BATTERY_STATE_STORAGE_KEY);
     } catch (_) {
         // ignore storage failure
+    }
+}
+
+function resetAIPanelStateForNewLogin() {
+    aiPanelSessionToken += 1;
+    latestDispatchResult = null;
+
+    const reportCard = document.getElementById('ai-report-card');
+    const priorityCard = document.getElementById('ai-priority-card');
+    const riskCard = document.getElementById('ai-risk-card');
+    const decisionCard = document.getElementById('ai-decision-card');
+    const reportContent = document.getElementById('ai-report-content');
+    const priorityList = document.getElementById('ai-priority-list');
+    const riskList = document.getElementById('ai-risk-list');
+    const decisionContent = document.getElementById('ai-decision-content');
+    const chatInput = document.getElementById('ai-chat-question');
+    const chatLast = document.getElementById('ai-chat-last');
+    const chatLastQ = document.getElementById('ai-chat-last-q');
+    const chatLastA = document.getElementById('ai-chat-last-a');
+    const preferenceSelect = document.getElementById('ai-preference-select');
+    const dialogContent = document.getElementById('ai-dialog-content');
+
+    [reportCard, priorityCard, riskCard, decisionCard].forEach(card => {
+        if (card) {
+            card.style.display = 'none';
+        }
+    });
+
+    if (reportContent) {
+        reportContent.textContent = '';
+    }
+    if (decisionContent) {
+        decisionContent.textContent = '';
+    }
+    if (priorityList) {
+        priorityList.innerHTML = '';
+    }
+    if (riskList) {
+        riskList.innerHTML = '';
+    }
+
+    if (chatInput) {
+        chatInput.value = '';
+    }
+    if (chatLastQ) {
+        chatLastQ.textContent = '';
+    }
+    if (chatLastA) {
+        chatLastA.textContent = '';
+    }
+    if (chatLast) {
+        chatLast.style.display = 'none';
+    }
+
+    if (preferenceSelect) {
+        preferenceSelect.value = 'coverage';
+    }
+
+    if (dialogContent) {
+        dialogContent.classList.remove('hidden');
+        dialogContent.scrollTop = 0;
     }
 }
 
@@ -10680,6 +11147,7 @@ window.onload = function() {
 
         bindSimulationModuleButtons();
         bindBatteryDispatcherControls();
+        initAIPanelEvents();
 
 
 

@@ -1021,26 +1021,71 @@
             <!-- AI Floating Dialog -->
             <div class="ai-floating-dialog">
                 <div class="ai-dialog-header" onclick="toggleAIDialog()">
-                    <h3>🤖 AI决策支持</h3>
+                    <h3>智能辅助决策</h3>
                     <button class="ai-dialog-toggle">▼</button>
                 </div>
                 <div class="ai-dialog-content" id="ai-dialog-content">
-                    <div class="panel-section">
-                        <div class="section-title">AI对比分析简报</div>
-                        <p class="instruction">基于智能选址和人工选址方案的对比分析</p>
-                        <button class="btn btn-primary" onclick="generateAIReport()">🤖 AI生成对比简报</button>
+                    <p class="ai-panel-note">本面板用于智能辅助决策，结果仅作管理参考，不替代核心优化算法输出。</p>
+                    <p class="ai-role-focus" id="ai-role-focus">当前重点：方案解释、调度待办、风险预警、决策问答。</p>
+
+                    <div class="panel-section" id="ai-compare-section">
+                        <div class="section-title">方案解释</div>
+                        <p class="instruction" id="ai-compare-instruction">对比智能选址与人工选址指标，生成当前推荐方案解释。</p>
+                        <button class="btn btn-primary" onclick="generateAIReport()">生成方案解释</button>
                         <div class="ai-report-card" id="ai-report-card" style="margin-top:15px;display:none;">
-                            <div class="ai-report-title">AI分析结果</div>
+                            <div class="ai-report-title">方案解释结果</div>
                             <div class="ai-report-content" id="ai-report-content"></div>
                         </div>
                     </div>
+
                     <div class="panel-section">
-                        <div class="section-title">AI调度优先级建议</div>
-                        <p class="instruction">基于当前供需数据的调度优先级建议</p>
-                        <button class="btn btn-primary" onclick="generateAIPriority()">📋 AI生成优先级</button>
+                        <div class="section-title">调度待办</div>
+                        <p class="instruction">基于当前调度结果与站点状态生成执行顺序建议。</p>
+                        <button class="btn btn-primary" onclick="generateAIPriority()">生成调度待办</button>
                         <div class="ai-priority-card" id="ai-priority-card" style="margin-top:15px;display:none;">
-                            <div class="ai-priority-title">AI优先级建议</div>
+                            <div class="ai-priority-title">调度待办清单</div>
                             <ul class="ai-priority-list" id="ai-priority-list"></ul>
+                        </div>
+                    </div>
+
+                    <div class="panel-section">
+                        <div class="section-title">风险预警</div>
+                        <p class="instruction">综合覆盖率、步行距离、负载均衡、缺车与低电量指标输出风险提示。</p>
+                        <button class="btn btn-primary" onclick="generateAIRisk()">生成风险提示</button>
+                        <div class="ai-risk-card" id="ai-risk-card" style="margin-top:15px;display:none;">
+                            <div class="ai-risk-title">风险提示</div>
+                            <ul class="ai-risk-list" id="ai-risk-list"></ul>
+                        </div>
+                    </div>
+
+                    <div class="panel-section">
+                        <div class="section-title">决策问答（表单式）</div>
+                        <p class="instruction">请选择偏好后生成建议，不提供开放式聊天。</p>
+                        <div class="ai-decision-form">
+                            <select id="ai-preference-select">
+                                <option value="coverage">优先覆盖率</option>
+                                <option value="cost">优先降低调度成本</option>
+                                <option value="balance">优先负载均衡</option>
+                                <option value="speed">优先快速缓解缺车</option>
+                            </select>
+                            <button class="btn btn-success" onclick="generateAIDecision()">生成建议</button>
+                        </div>
+                        <div class="ai-decision-card" id="ai-decision-card" style="margin-top:12px;display:none;">
+                            <div class="ai-decision-title">决策建议</div>
+                            <div class="ai-decision-content" id="ai-decision-content"></div>
+                        </div>
+                    </div>
+
+                    <div class="panel-section">
+                        <div class="section-title">受限助手提问</div>
+                        <p class="instruction">仅支持当前系统业务问题，仅保留最近 1 轮问答显示。</p>
+                        <div class="ai-chat-row">
+                            <textarea id="ai-chat-question" rows="3" placeholder="例如：当前应先处理哪类调度任务？"></textarea>
+                            <button class="btn btn-secondary" onclick="submitAIChat()">发送</button>
+                        </div>
+                        <div class="ai-chat-last" id="ai-chat-last" style="display:none;">
+                            <div class="ai-chat-q" id="ai-chat-last-q"></div>
+                            <div class="ai-chat-a" id="ai-chat-last-a"></div>
                         </div>
                     </div>
                 </div>

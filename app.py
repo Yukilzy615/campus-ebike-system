@@ -19,6 +19,13 @@ from algorithms.location_opt import run_location_optimization
 from algorithms.dispatch_opt import run_dispatch_optimization
 from algorithms.bike_simulator import generate_bike_simulation
 from algorithms.battery_opt import get_low_battery_vehicles, plan_battery_routes
+from algorithms.ai_assistant import (
+    generate_compare_report,
+    generate_dispatch_priority,
+    generate_risk_alerts,
+    generate_decision_answer,
+    generate_chat_response,
+)
 
 # ----------------------------- 初始化Flask -----------------------------
 app = Flask(__name__, static_folder='static')
@@ -433,6 +440,36 @@ def battery_route():
         return jsonify(result)
     except Exception as e:
         return jsonify({'routes': [], 'error': str(e)}), 500
+
+
+@app.route('/api/ai/compare-report', methods=['POST'])
+def ai_compare_report():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_compare_report(data))
+
+
+@app.route('/api/ai/priority', methods=['POST'])
+def ai_priority():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_dispatch_priority(data))
+
+
+@app.route('/api/ai/risk', methods=['POST'])
+def ai_risk():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_risk_alerts(data))
+
+
+@app.route('/api/ai/decision', methods=['POST'])
+def ai_decision():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_decision_answer(data))
+
+
+@app.route('/api/ai/chat', methods=['POST'])
+def ai_chat():
+    data = request.get_json(silent=True) or {}
+    return jsonify(generate_chat_response(data))
 
 # ----------------------------- 前端入口 -----------------------------
 @app.route('/')

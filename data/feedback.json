@@ -1,0 +1,44 @@
+[
+  {
+    "id": 1,
+    "reporter": "admin",
+    "reporter_display": "调度员（admin）",
+    "role": "dispatcher",
+    "type": "路线执行问题",
+    "related_task": "1",
+    "description": "1",
+    "priority": "一般",
+    "status": "已处理",
+    "admin_note": "22",
+    "created_at": "2026-04-20 11:37:23",
+    "updated_at": "2026-04-20 12:47:24"
+  },
+  {
+    "id": 2,
+    "reporter": "admin",
+    "reporter_display": "调度员（admin）",
+    "role": "dispatcher",
+    "type": "路线执行问题",
+    "related_task": "1",
+    "description": "1",
+    "priority": "一般",
+    "status": "已处理",
+    "admin_note": "看",
+    "created_at": "2026-04-20 12:39:20",
+    "updated_at": "2026-04-23 03:05:11"
+  },
+  {
+    "id": 3,
+    "reporter": "调度员7",
+    "reporter_display": "调度员（调度员7）",
+    "role": "dispatcher",
+    "type": "路线执行问题",
+    "related_task": "",
+    "description": "111",
+    "priority": "一般",
+    "status": "已处理",
+    "admin_note": "111",
+    "created_at": "2026-04-23 03:04:38",
+    "updated_at": "2026-04-23 03:05:18"
+  }
+]

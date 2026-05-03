@@ -6,15 +6,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36588714299494,
-          30.536135164094876
+          114.36666481445859,
+          30.531607239222584
         ]
       },
       "properties": {
         "selected": true,
         "id": 1,
         "name": "停车点1",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 100
       }
     },
@@ -23,15 +23,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36948780434437,
-          30.535803063643076
+          114.36831258664824,
+          30.532152926757192
         ]
       },
       "properties": {
         "selected": true,
         "id": 2,
         "name": "停车点2",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 110
       }
     },
@@ -40,15 +40,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36826311170007,
-          30.5352264789314
+          114.3611183231372,
+          30.53408083303121
         ]
       },
       "properties": {
         "selected": true,
         "id": 3,
         "name": "停车点3",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 120
       }
     },
@@ -57,15 +57,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36938674385641,
-          30.534009706468893
+          114.36377004024554,
+          30.534031335449015
         ]
       },
       "properties": {
         "selected": true,
         "id": 4,
         "name": "停车点4",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 130
       }
     },
@@ -74,15 +74,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36938461796917,
-          30.53333753425095
+          114.36502095933326,
+          30.53259445049739
         ]
       },
       "properties": {
         "selected": true,
         "id": 5,
         "name": "停车点5",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 140
       }
     },
@@ -91,15 +91,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36701063430043,
-          30.532639798821776
+          114.36602664019792,
+          30.534934534289253
         ]
       },
       "properties": {
         "selected": true,
         "id": 6,
         "name": "停车点6",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 150
       }
     },
@@ -108,15 +108,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36826117058179,
-          30.532638793839695
+          114.3688758712508,
+          30.534379334058567
         ]
       },
       "properties": {
         "selected": true,
         "id": 7,
         "name": "停车点7",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 160
       }
     },
@@ -125,15 +125,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.3677518848527,
-          30.537320516857577
+          114.36452803613132,
+          30.53619245725657
         ]
       },
       "properties": {
         "selected": true,
         "id": 8,
         "name": "停车点8",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 170
       }
     },
@@ -142,15 +142,15 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36521831864023,
-          30.537688953699604
+          114.36660458429809,
+          30.537013843623622
         ]
       },
       "properties": {
         "selected": true,
         "id": 9,
         "name": "停车点9",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 180
       }
     },
@@ -159,22 +159,25 @@
       "geometry": {
         "type": "Point",
         "coordinates": [
-          114.36391499411528,
-          30.537704900712235
+          114.3647416167688,
+          30.53794713580211
         ]
       },
       "properties": {
         "selected": true,
         "id": 10,
         "name": "停车点10",
-        "capacity": 20,
+        "capacity": 40,
         "service_count": 190
       }
     }
   ],
   "metadata": {
-    "coverage": 0.3719298245614035,
-    "avg_distance": 63.73180034318262,
+    "coverage": 0.7881040892193308,
+    "avg_distance": 116.99000706740657,
+    "balance": 79.50920735311509,
+    "capacity": 400.0,
+    "num_locations": 10,
     "K": 10,
     "description": "Best solution"
   }

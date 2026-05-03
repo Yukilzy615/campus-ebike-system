@@ -1,4 +1,4 @@
-﻿// ==================== 全局变量和常量====================
+// ==================== 全局变量和常量====================
 
 
 
@@ -255,6 +255,12 @@ let dispatchLayers = [];
 let dispatchLines = [];
 
 let dispatchMarkers = [];
+let activeDispatchRouteIndex = null;
+let activeSegmentIndex = null;
+let tempSegmentLine = null;
+
+const DISPATCH_COLORS = ['#9c27b0', '#4caf50', '#f44336'];
+const DISPATCH_HIGHLIGHT_COLOR = '#ff9800';
 
 let poiMarkers = [];
 
@@ -286,15 +292,9 @@ let manualLocationMetrics = null;
 
 let dispatchFeatures = [];
 
-let dispatchCache = {};
+let demandPointsData = null;
 
-let supplyDemandCalcCache = {};
-
-let pointsV2Cache = null;
-
-let pointsV2LoadingPromise = null;
-
-let pointsV2LoadFailed = false;
+let radiusUpdateSeq = 0;
 
 let selectedScheme = 'auto';
 
@@ -305,14 +305,42 @@ let latestSmartLocationResult = null;
 let latestDispatchResult = null;
 
 let savedPredictionData = null;
+let initialPredictionData = null;
+let initialUsageData = null;
+let isResetting = false;
+let chartsInitialized = false;
 
 let currentPOIData = null;
 
 let currentPoiSource = 'mock';
 
 let currentUserRole = 'admin';
+let currentUsername = 'admin';
+let feedbackListCache = [];
+let feedbackEditingId = null;
+let feedbackRequestSeq = 0;
 
-// 电单车模拟全局状态
+// 生成选址方案 hash（用于标识当前方案）
+function generateSchemeHash(scheme) {
+    const effectiveScheme = scheme || getEffectiveScheme();
+    const markers = effectiveScheme === 'smart' ? smartMarkers : manualMarkers;
+    const markerInfos = markers.map(m => {
+        let lat;
+        let lng;
+        if (m.marker && typeof m.marker.getPosition === 'function') {
+            const pos = m.marker.getPosition();
+            lat = pos.lat;
+            lng = pos.lng;
+        } else {
+            lat = m.lat;
+            lng = m.lng;
+        }
+        return `${lat.toFixed(6)},${lng.toFixed(6)}`;
+    }).sort().join('|');
+    return `${effectiveScheme}_${currentServiceRadius}_${markers.length}_${markerInfos}`;
+}
+
+// 电动车模拟全局状态
 let ebikeSimMarkers = [];
 let ebikeSimData = [];
 let ebikeAnimationTimer = null;
@@ -326,8 +354,9 @@ let batteryRouteAssignments = {};
 let batteryLastRouteResult = null;
 let aiPanelSessionToken = 0;
 
-const BATTERY_ROUTE_COLORS = ['#28a745', '#1a73e8', '#fb8c00', '#8e24aa', '#00acc1', '#d81b60'];
-const BATTERY_DEFAULT_CAPACITY = 6;
+
+const BATTERY_ROUTE_COLORS = ['#1a73e8', '#00acc1', '#6d4c41', '#546e7a'];
+const BATTERY_DEFAULT_CAPACITY = 10;
 const BATTERY_STATE_STORAGE_KEY = 'battery_ops_state_v1';
 const BATTERY_ARROW_ROTATION_OFFSET = 90;
 const AI_RESULT_FALLBACK_TEXT = '当前未获取到分析结果，请先运行相关模块或稍后重试';
@@ -642,11 +671,6 @@ function wgs84ToBd09(lng, lat) {
 
 }
 
-
-
-
-
-
 function bd09ToWgs84(lng, lat) {
 
 
@@ -773,7 +797,7 @@ function calcDistanceMeters(lat1, lng1, lat2, lng2) {
 
 // 使用射线法判断点是否在多边形内
 
-function isPointInPolygon(lat, lng, polygon) {
+function isPointInPolygon(lng, lat, polygon) {
 
     let inside = false;
 
@@ -782,15 +806,16 @@ function isPointInPolygon(lat, lng, polygon) {
     for (let i = 0, j = n - 1; i < n; j = i++) {
 
         const xi = polygon[i][0], yi = polygon[i][1];
-
         const xj = polygon[j][0], yj = polygon[j][1];
+        
+        // 处理除以零的情况（水平边）
+        if (yj === yi) {
+            continue; // 跳过水平边
+        }
 
         if (((yi > lat) !== (yj > lat)) &&
-
             (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) {
-
             inside = !inside;
-
         }
 
     }
@@ -805,8 +830,31 @@ function isPointInPolygon(lat, lng, polygon) {
 
 function isInsideBoundary(lat, lng) {
 
-    return isPointInPolygon(lat, lng, CAMPUS_BOUNDARY_POLYGON);
+    return isPointInPolygon(lng, lat, CAMPUS_BOUNDARY_POLYGON);
 
+}
+
+// 显示校园边界
+function showCampusBoundary() {
+    // 创建边界多边形
+    const boundaryPolygon = new BMap.Polygon(
+        CAMPUS_BOUNDARY_POLYGON.map(coord => new BMap.Point(coord[0], coord[1])),
+        {
+            strokeColor: '#ff0000',
+            strokeWeight: 2,
+            strokeOpacity: 0.8,
+            fillColor: '#ff0000',
+            fillOpacity: 0.1
+        }
+    );
+    
+    // 添加到地图
+    map.addOverlay(boundaryPolygon);
+    
+    // 3秒后自动移除
+    setTimeout(() => {
+        map.removeOverlay(boundaryPolygon);
+    }, 3000);
 }
 
 
@@ -821,31 +869,17 @@ function isInsideBoundary(lat, lng) {
 
 function showToast(message) {
 
-
-
     // 简单的 toast 实现
-
-
 
     const toast = document.createElement('div');
 
-
-
-    toast.className = 'toast';
-
-
+    toast.className = 'toast show';
 
     toast.textContent = message;
 
-
-
     document.body.appendChild(toast);
 
-
-
     setTimeout(() => toast.remove(), 3000);
-
-
 
 }
 
@@ -1264,7 +1298,7 @@ async function initMap() {
 
 
 
-        map.centerAndZoom(centerPoint, 16);
+        map.centerAndZoom(centerPoint, 18);
 
 
 
@@ -1309,6 +1343,15 @@ async function initMap() {
 
 
         map.addEventListener('click', onMapClick);
+        
+        // 地图缩放事件，保持路径粗细稳定
+        map.addEventListener('zoomend', function() {
+            dispatchLines.forEach(line => {
+                if (line && typeof line.setStrokeWeight === 'function') {
+                    line.setStrokeWeight(5);
+                }
+            });
+        });
 
 
 
@@ -1385,35 +1428,30 @@ function onMapClick(e) {
 
 
         const point = e.point;
+        const rawLat = point.lat;
+        const rawLng = point.lng;
 
+        // 转换坐标系：确保使用BD09格式（和智能选址一致）
+        const normalized = normalizeBikeToBd09(rawLng, rawLat);
+        if (!normalized) {
+            console.warn('人工选址点坐标转换失败:', { rawLng, rawLat });
+            return;
+        }
+        
+        const lat = normalized.lat;
+        const lng = normalized.lng;
+        const bdPoint = new BMap.Point(lng, lat);
 
-
-        const lat = point.lat;
-
-
-
-        const lng = point.lng;
-
-
-
-
-
-
-
-        // 检查是否在校园边界常
-
-
+        // 检查是否在信息学部边界内
         if (!isInsideBoundary(lat, lng)) {
 
-
-
-            showToast('请在校园边界内添加选址点');
-
-
+            showToast('请在信息学部范围内选择！');
+            alert('请在红色边界内选择选址点！');
+            
+            // 显示信息学部边框，3秒后自动消失
+            showCampusBoundary();
 
             return;
-
-
 
         }
 
@@ -1423,7 +1461,17 @@ function onMapClick(e) {
 
 
 
-        // 使用 BMap.Symbol 创建三三角形标记（红扲常
+        // 使用         // 将选址点后后转到最近的路网节点，确保路线沿路网轮行
+        const snappedPoint = snapToNearestRoad(lat, lng, 100);
+        if (snappedPoint.snapped) {
+            console.log('人工选址点后转行路网点 (' + snappedPoint.lat + ', ' + snappedPoint.lng + ')');
+            // 使用轮网点的坐标
+            normalized.lat = snappedPoint.lat;
+            normalized.lng = snappedPoint.lng;
+        }
+
+
+        // 创建三三角形标记（红扲常
 
 
         const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
@@ -1452,64 +1500,59 @@ function onMapClick(e) {
 
         });
 
+        const marker = new BMap.Marker(bdPoint, { icon, enableDragging: currentMode === 'add' });
 
-
-
-
-
-
-        const marker = new BMap.Marker(point, { icon, enableDragging: true });
-
-
-
-
-
-
-
-        // 拽结束事件
-
-
-
+        // 拖拽结束事件
         marker.addEventListener('dragend', function(e) {
-
-
-
-            const newPoint = e.point;
-
-
-
+            // 检查是否在人工选址模式
+            if (currentMode !== 'add') {
+                // 恢复到原位置
+                const idx = manualMarkers.findIndex(m => m.marker === this);
+                if (idx >= 0) {
+                    const oldPoint = new BMap.Point(manualMarkers[idx].lng, manualMarkers[idx].lat);
+                    this.setPosition(oldPoint);
+                }
+                showToast('请先点击"开始人工选址"按钮进入编辑模式');
+                return;
+            }
+            
+            const newRawPoint = e.point;
+            
+            // 转换坐标系（拖拽后的坐标也需要转换）
+            const newNormalized = normalizeBikeToBd09(newRawPoint.lng, newRawPoint.lat);
+            if (!newNormalized) {
+                console.warn('拖拽后坐标转换失败:', { lng: newRawPoint.lng, lat: newRawPoint.lat });
+                return;
+            }
+            
+            const newLat = newNormalized.lat;
+            const newLng = newNormalized.lng;
+            
+            // 检查是否在信息学部边界内
+            if (!isInsideBoundary(newLat, newLng)) {
+                // 恢复到原位置
+                const idx = manualMarkers.findIndex(m => m.marker === this);
+                if (idx >= 0) {
+                    const oldPoint = new BMap.Point(manualMarkers[idx].lng, manualMarkers[idx].lat);
+                    this.setPosition(oldPoint);
+                }
+                showToast('请在信息学部范围内选择！');
+                showCampusBoundary();
+                return;
+            }
+            
+            const newBdPoint = new BMap.Point(newLng, newLat);
+            
             const idx = manualMarkers.findIndex(m => m.marker === this);
-
-
-
             if (idx >= 0) {
-
-
-
-                manualMarkers[idx].lat = newPoint.lat;
-
-
-
-                manualMarkers[idx].lng = newPoint.lng;
-
-
-
-                // 更新覆盖范围常
-
-
+                manualMarkers[idx].lat = newLat;
+                manualMarkers[idx].lng = newLng;
+                
+                // 更新覆盖范围
                 if (manualCircles[idx]) {
-
-
-
                     map.removeOverlay(manualCircles[idx]);
-
-
-
                     manualCircles[idx] = new BMap.Circle(
-
-
-
-                        new BMap.Point(newPoint.lng, newPoint.lat),
+                        newBdPoint,
 
 
 
@@ -1551,30 +1594,11 @@ function onMapClick(e) {
 
                 }
 
-
-
-                // 重新计算指标
-
-
-
-                const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-
-
-
-                manualLocationMetrics = calculateCoreMetrics(points);
-
-
-
-                updateCoreMetrics();
-
-
-
-                updateManualCoverage();
-
+                // 拖拽后调用后端API重新计算覆盖率
+                calculateManualCoverageFromAPI();
 
 
             }
-
 
 
         });
@@ -1586,55 +1610,43 @@ function onMapClick(e) {
 
 
         // 右键删除
-
-
-
         marker.addEventListener('rightclick', function(e) {
-
-
+            // 检查是否在人工选址模式
+            if (currentMode !== 'add') {
+                showToast('请先点击"开始人工选址"按钮进入编辑模式');
+                return;
+            }
 
             const idx = manualMarkers.findIndex(m => m.marker === this);
-
 
 
             if (idx >= 0) {
 
 
-
                 map.removeOverlay(this);
-
 
 
                 if (manualCircles[idx]) {
 
 
-
                     map.removeOverlay(manualCircles[idx]);
-
 
 
                 }
 
 
-
                 manualMarkers.splice(idx, 1);
-
-
-
                 manualCircles.splice(idx, 1);
 
+                // 重要：修改人工选址时重置缓存的指标，这样下次会重新计算
+                manualLocationMetrics = null;
 
-
-                updateManualCoverage();
-
-
-
+                // 调用后端API计算覆盖率，确保与智能选址计算方式一致
+                calculateManualCoverageFromAPI();
                 document.getElementById('status-manual').textContent = manualMarkers.length;
 
 
-
             }
-
 
 
         });
@@ -1645,34 +1657,17 @@ function onMapClick(e) {
 
 
 
-        // 弹出信息
-
-
-
+        // ⭐修复：生成带序号的名称，与智能选址点保持一致
+        const pointName = `人工选址点${manualMarkers.length + 1}`;
+        
+        // 弹出信息（与智能选址点保持一致）
         const popupContent = `
-
-
-
             <div class="popup-content">
-
-
-
-                <div class="popup-title">人工选址</div>
-
-
-
+                <div class="popup-title">${pointName}</div>
+                <div class="popup-row"><span class="popup-label">名称</span><span class="popup-value">${pointName}</span></div>
+                <div class="popup-row"><span class="popup-label">容量</span><span class="popup-value">40 车位</span></div>
                 <div class="popup-row"><span class="popup-label">坐标</span><span class="popup-value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>
-
-
-
-                <div class="popup-row"><span class="popup-label">操作</span><span class="popup-value"><a href="javascript:void(0)" onclick="deleteManualMarker(this)">删除</a></span></div>
-
-
-
             </div>
-
-
-
         `;
 
 
@@ -1693,20 +1688,6 @@ function onMapClick(e) {
 
 
 
-        marker.openInfoWindow(infoWindow);
-
-
-
-
-
-
-
-        map.addOverlay(marker);
-
-
-
-        manualMarkers.push({ marker, lat, lng, type: 'manual' });
-
 
 
 
@@ -1714,70 +1695,61 @@ function onMapClick(e) {
 
 
         // 覆盖范围常
+        // 先添加标记，再添加点击事件
+        map.addOverlay(marker);
+        marker._isOnMap = true; // 标记已经在地图上
 
+        // 添加点击事件 - 使用闭包确保正确引用
+        const savedMarker = marker;
+        const savedInfoWindow = infoWindow;
+        marker.addEventListener('click', function() {
+            console.log('点击人工标记!');
+            map.openInfoWindow(savedInfoWindow, savedMarker.getPosition());
+        });
 
         const circle = new BMap.Circle(
-
-
-
-            point,
-
-
-
+            bdPoint,
             currentServiceRadius,
-
-
-
             {
-
-
-
                 strokeColor: '#ea4335',
-
-
-
                 strokeWeight: 1,
-
-
-
                 fillColor: '#ea4335',
-
-
-
-                fillOpacity: 0.15
-
-
-
+                fillOpacity: 0.15,
+                zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+                enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
             }
-
-
-
         );
 
-
-
         map.addOverlay(circle);
-
-
+        circle._isOnMap = true; // 标记圆已经在地图上
 
         manualCircles.push(circle);
 
-
-
-
-
-
+        // 保存 infoWindow 到标记对象中，并设置名称
+        manualMarkers.push({ 
+            marker, 
+            lat: lat, 
+            lng: lng, 
+            name: pointName, 
+            type: 'manual', 
+            serviceRadius: currentServiceRadius, 
+            infoWindow: infoWindow 
+        });
+        // 打开信息窗口（暂时注释掉，避免报错）
+        // marker.openInfoWindow(infoWindow);
 
         document.getElementById('status-manual').textContent = manualMarkers.length;
+        // 更新系统概览数据
+        updateSystemStatus();
 
-
-
-        updateManualCoverage();
-
+        // 重置缓存的指标，并调用后端API计算覆盖率
+        manualLocationMetrics = null;
+        
+        // 调用后端API计算覆盖率，确保与智能选址计算方式一致
+        calculateManualCoverageFromAPI();
 
 
     }
-
 
 
 }
@@ -1785,6 +1757,51 @@ function onMapClick(e) {
 
 
 
+
+
+
+// 调用后端API计算人工选址覆盖率
+async function calculateManualCoverageFromAPI() {
+    if (manualMarkers.length === 0) {
+        document.getElementById('manual-coverage').textContent = '0%';
+        document.getElementById('manual-coverage-bar').style.width = '0%';
+        return;
+    }
+    
+    const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+    try {
+        const response = await fetch('/api/calculate-coverage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parking_points: points,
+                service_radius: currentServiceRadius
+            })
+        });
+        const result = await response.json();
+        if (result.coverage !== undefined) {
+            manualLocationMetrics = {
+                coverage: result.coverage,
+                avg_distance: result.avg_distance || 0,
+                balance: result.balance || 0,
+                capacity: result.capacity || 0
+            };
+        }
+    } catch (error) {
+        console.error('计算人工方案覆盖率失败:', error);
+        // 如果API调用失败，使用前端计算作为后备
+        const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        manualLocationMetrics = calculateCoreMetrics(points);
+    }
+    
+    // 更新覆盖率显示
+    const coverage = manualLocationMetrics.coverage * 100;
+    document.getElementById('manual-coverage').textContent = coverage.toFixed(1) + '%';
+    document.getElementById('manual-coverage-bar').style.width = coverage + '%';
+    
+    // 更新核心指标显示
+    updateCoreMetrics();
+}
 
 
 
@@ -1832,6 +1849,14 @@ function startManualLocation() {
 
 
     showToast('进入人工选址模式，点击地图添加选址点');
+    
+    // 更新所有已有人工点的拖拽权限
+    manualMarkers.forEach(item => {
+        if (item.marker) {
+            // 启用拖拽
+            item.marker.enableDragging();
+        }
+    });
 
 
 
@@ -1847,7 +1872,7 @@ function startManualLocation() {
 
 
 
-function saveManualLocation() {
+async function saveManualLocation() {
 
 
 
@@ -1868,13 +1893,73 @@ function saveManualLocation() {
 
 
     showToast('人工选址方案已保存');
+    
+    // 更新所有已有人工点的拖拽权限
+    manualMarkers.forEach(item => {
+        if (item.marker) {
+            // 禁用拖拽
+            item.marker.disableDragging();
+        }
+    });
+
 
 
 
     updateSchemeStatusDisplay();
 
+    // 重要：保存人工方案时，调用后端API计算指标，保持与智能方案一致！
+    if (manualMarkers.length > 0) {
+        const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        console.log('Calling /api/calculate-coverage for manual save with:', {
+            parking_points: points,
+            service_radius: currentServiceRadius
+        });
+        try {
+            const response = await fetch('/api/calculate-coverage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    parking_points: points,
+                    service_radius: currentServiceRadius
+                })
+            });
+            const result = await response.json();
+            console.log('Response from /api/calculate-coverage for manual save:', result);
+            if (result.coverage !== undefined) {
+                manualLocationMetrics = {
+                    coverage: result.coverage,
+                    avg_distance: result.avg_distance || 0,
+                    balance: result.balance || 0,
+                    capacity: result.capacity || 0
+                };
+                console.log('Updated manualLocationMetrics after save:', manualLocationMetrics);
+            }
+        } catch (error) {
+            console.error('计算人工方案覆盖率失败:', error);
+        }
+    }
 
+    // 人工选址完成后，更新停车点供需状态
+    const timeSlot = document.getElementById('dispatch-time')?.value || 'morning';
+    generateSupplyDemandTable(timeSlot, 'manual');
+    // 设置当前方案为人工选址
+    selectedScheme = 'manual';
 
+    // 更新核心指标
+    updateCoreMetrics();
+    updateManualCoverage();
+    // 更新方案选择器的显示
+    const selector = document.getElementById('selected-scheme');
+    if (selector) {
+        selector.value = 'manual';
+    }
+
+    // 重新渲染调度路线，确保在最上层
+    if (window.currentDispatchGeoJson) {
+        renderDispatch(window.currentDispatchGeoJson);
+    }
+    // 更新标记显示
+    updateSelectedScheme();
 }
 
 
@@ -1887,15 +1972,19 @@ function saveManualLocation() {
 
 
 
-function clearManualLocations() {
+function clearManualLocations(silent) {
 
 
 
-    manualMarkers.forEach(item => map.removeOverlay(item.marker));
+    if (map) {
+        manualMarkers.forEach(item => map.removeOverlay(item.marker));
+    }
 
 
 
-    manualCircles.forEach(circle => map.removeOverlay(circle));
+    if (map) {
+        manualCircles.forEach(circle => map.removeOverlay(circle));
+    }
 
 
 
@@ -1914,21 +2003,20 @@ function clearManualLocations() {
     document.getElementById('status-manual').textContent = '0';
 
 
-
     document.getElementById('manual-coverage').textContent = '0%';
-
 
 
     document.getElementById('manual-coverage-bar').style.width = '0%';
 
 
-
     updateSchemeStatusDisplay();
+    updateCoreMetrics();
+    // 更新标记显示
+    updateSelectedScheme();
 
-
-
-    showToast('人工选址点已清空');
-
+    if (!silent) {
+        showToast('人工选址点已清空');
+    }
 
 
 }
@@ -1943,10 +2031,8 @@ function clearManualLocations() {
 
 
 
-function runSmartLocation() {
-
+async function runSmartLocation() {
     showProgress('正在运行智能选址算法...');
-
     const count = parseInt(document.getElementById('smart-count')?.value) || 10;
     const serviceRadius = parseInt(document.getElementById('service-radius')?.value) || currentServiceRadius || 100;
     const objCoverage = !!document.getElementById('obj-coverage')?.checked;
@@ -1955,19 +2041,37 @@ function runSmartLocation() {
 
     currentServiceRadius = serviceRadius;
 
-    setTimeout(() => {
-        try {
-            const result = generateMockLocations(count, objCoverage, objDistance, objBalance);
-            renderSmartLocations(result);
-            updateSchemeStatusDisplay();
-            showToast('智能选址完成，共生成 ' + result.features.length + ' 个选址点');
-        } catch (error) {
-            console.error('智能选址执行失败:', error);
-            showToast('智能选址失败，请重试');
-        } finally {
-            hideProgress();
+    try {
+        const response = await fetch(API_BASE + 'optimize-location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                num_locations: count,
+                service_radius: serviceRadius,
+                optimize_coverage: objCoverage,
+                optimize_distance: objDistance,
+                optimize_balance: objBalance
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result?.error || '智能选址接口返回失败');
         }
-    }, 200);
+        if (!result || !Array.isArray(result.features)) {
+            throw new Error('智能选址结果格式不正确');
+        }
+
+        renderSmartLocations(result);
+        // 更新系统概览数据
+        updateSystemStatus();
+    } catch (error) {
+        console.error('智能选址失败:', error);
+        showToast(`智能选址失败：${error.message || '未知错误'}`);
+    } finally {
+        hideProgress();
+    }
 }
 
 // 生成模拟选址数据
@@ -2604,37 +2708,14 @@ function renderSmartLocations(geoJson) {
 
 
 
-    // 保存后端返回的指标数常
-
-
+    // 保存后端返回的指标数据（智能方案口径统一以后端 metadata 为准）
     if (geoJson.metadata) {
-
-
-
         smartMetrics = {
-
-
-
-            coverage: geoJson.metadata.coverage || 0,
-
-
-
-            avg_distance: geoJson.metadata.avg_distance || 0,
-
-
-
-            balance: geoJson.metadata.balance || 0,
-
-
-
-            capacity: geoJson.metadata.K ? geoJson.metadata.K * 20 : 0
-
-
-
+            coverage: Number(geoJson.metadata.coverage) || 0,
+            avg_distance: Number(geoJson.metadata.avg_distance) || 0,
+            balance: Number(geoJson.metadata.balance) || 0,
+            capacity: Number(geoJson.metadata.capacity) || 0
         };
-
-
-
     }
 
 
@@ -2643,15 +2724,23 @@ function renderSmartLocations(geoJson) {
 
 
 
+    console.log('后端返回的 features 数量:', geoJson.features.length);
+    let processedCount = 0;
     geoJson.features.forEach((feature, idx) => {
+        console.log(`处理第 ${idx + 1} 个 feature:`, feature);
 
-
-
-        if (!feature.geometry || !feature.geometry.coordinates) return;
-
-
+        if (!feature.geometry || !feature.geometry.coordinates) {
+            console.warn(`第 ${idx + 1} 个 feature 没有 geometry 或 coordinates:`, feature.geometry);
+            return;
+        }
 
         const [rawLng, rawLat] = feature.geometry.coordinates;
+        console.log(`第 ${idx + 1} 个 feature 提取坐标: rawLng=${rawLng}, rawLat=${rawLat}`);
+
+        if (!Array.isArray(feature.geometry.coordinates) || feature.geometry.coordinates.length < 2) {
+            console.warn(`第 ${idx + 1} 个 feature coordinates 格式错误:`, feature.geometry.coordinates);
+            return;
+        }
 
 
 
@@ -2667,23 +2756,31 @@ function renderSmartLocations(geoJson) {
 
 
 
-        let lng = Number(rawLng);
-        let lat = Number(rawLat);
+        const lng = Number(rawLng);
+        const lat = Number(rawLat);
+        console.log(`第 ${idx + 1} 个 feature 转换坐标: lng=${lng}, lat=${lat}`);
+
         if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
             console.warn('智能选址点坐标无效:', feature.geometry.coordinates);
             return;
         }
 
-        if (!isInsideBoundary(lat, lng)) {
-            const converted = wgs84ToBd09(lng, lat);
-            if (Number.isFinite(converted.lng) && Number.isFinite(converted.lat) && isInsideBoundary(converted.lat, converted.lng)) {
-                lng = converted.lng;
-                lat = converted.lat;
-            } else {
-                console.warn('智能选址点不在边界内:', { rawLat, rawLng });
-                return;
+        try {
+            const inside = isInsideBoundary(lat, lng);
+            console.log(`第 ${idx + 1} 个 feature 边界检查: inside=${inside}`);
+            if (!inside) {
+                console.warn('智能选址点不在边界内:', { lat, lng });
+                // 暂时注释掉return，允许处理边界外的点
+                // return;
             }
+            console.log(`第 ${idx + 1} 个 feature 边界检查通过，开始坐标转换`);
+        } catch (e) {
+            console.error(`第 ${idx + 1} 个 feature 边界检查出错:`, e);
+            // 出错时默认认为点在边界内，避免因为边界检查错误而过滤掉有效点
+            console.log(`第 ${idx + 1} 个 feature 边界检查出错，默认认为在边界内`);
         }
+        console.log(`处理第 ${idx + 1} 个 feature，原始坐标: lng=${rawLng}, lat=${rawLat}`);
+        console.log(`第 ${idx + 1} 个 feature 处理成功，添加到 smartMarkers`);
 
 
 
@@ -2691,10 +2788,16 @@ function renderSmartLocations(geoJson) {
 
 
 
-        // 直接使用 BD09 坐标，不需要转换
-
-
-        const point = new BMap.Point(lng, lat);
+        // 转换坐标系：确保使用BD09格式
+        console.log(`第 ${idx + 1} 个 feature 开始坐标转换`);
+        const normalized = normalizeBikeToBd09(lng, lat);
+        console.log(`第 ${idx + 1} 个 feature 坐标转换结果:`, normalized);
+        if (!normalized) {
+            console.warn('智能选址点坐标转换失败:', { lng, lat }, `第 ${idx + 1} 个 feature`);
+            return;
+        }
+        console.log(`第 ${idx + 1} 个 feature 坐标转换成功`);
+        const point = new BMap.Point(normalized.lng, normalized.lat);
 
 
 
@@ -2704,38 +2807,19 @@ function renderSmartLocations(geoJson) {
 
         // 使用 BMap.Symbol 创建三角形标记（蓝色）
 
-
         const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
-
-
 
             scale: 0.8,
 
-
-
             strokeWeight: 1,
-
-
 
             strokeColor: '#1a73e8',
 
-
-
             fillColor: '#1a73e8',
-
-
 
             fillOpacity: 0.9
 
-
-
         });
-
-
-
-
-
-
 
         const marker = new BMap.Marker(point, { icon, enableDragging: false });
 
@@ -2801,86 +2885,46 @@ function renderSmartLocations(geoJson) {
 
 
 
+        // 覆盖范围常
+        // 先添加标记，再添加点击事件
+        map.addOverlay(marker);
+        marker._isOnMap = true; // 标记已经在地图上
+
+        // 添加点击事件 - 使用闭包确保正确引用
+        const savedMarker = marker;
+        const savedInfoWindow = infoWindow;
         marker.addEventListener('click', function() {
-
-
-
-            this.openInfoWindow(infoWindow);
-
-
-
+            console.log('点击智能标记!');
+            map.openInfoWindow(savedInfoWindow, savedMarker.getPosition());
         });
 
-
-
-
-
-
-
-        map.addOverlay(marker);
-
-
-
-        smartMarkers.push({ marker, lat, lng, data: props, type: 'smart' });
-
-
-
-
-
-
-
-        // 覆盖范围常
-
-
         const circle = new BMap.Circle(
-
-
-
             point,
-
-
-
             currentServiceRadius,
-
-
-
             {
-
-
-
                 strokeColor: '#1a73e8',
-
-
-
                 strokeWeight: 1,
-
-
-
                 fillColor: '#1a73e8',
-
-
-
-                fillOpacity: 0.15
-
-
-
+                fillOpacity: 0.15,
+                zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+                enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
             }
-
-
-
         );
 
-
-
         map.addOverlay(circle);
-
-
+        circle._isOnMap = true; // 标记圆已经在地图上
 
         smartCircles.push(circle);
+
+        // 保存 infoWindow 到标记对象中
+        smartMarkers.push({ marker, lat: normalized.lat, lng: normalized.lng, data: props, type: 'smart', serviceRadius: currentServiceRadius, infoWindow: infoWindow });
 
 
 
     });
+    console.log('处理完成，实际添加到 smartMarkers 的数量:', smartMarkers.length);
+
+
 
 
 
@@ -2890,25 +2934,33 @@ function renderSmartLocations(geoJson) {
 
     document.getElementById('status-smart').textContent = smartMarkers.length;
 
-
-
-    // 计算核心指标
-    const smartPoints = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-    const calculatedMetrics = calculateCoreMetrics(smartPoints);
-    smartMetrics = calculatedMetrics;
-
-
-
+    // 使用后端返回的覆盖率指标（智能方案口径统一以后端 metadata 为准）
+    // 不要重新计算覆盖率，确保前后端一致
     updateSmartCoverage();
-
-    updateSchemeStatusDisplay();
-
-
 
     updateCoreMetrics();
 
+    updateSchemeStatusDisplay();
 
-
+    // 智能选址完成后，更新停车点供需状态
+    const timeSlot = document.getElementById('dispatch-time')?.value || 'morning';
+    generateSupplyDemandTable(timeSlot, 'smart');
+    // 运行智能选址后，自动切换到智能方案
+    selectedScheme = 'smart';
+    // 自动更新方案选择器的显示
+    const selector = document.getElementById('selected-scheme');
+    if (selector) {
+        selector.value = 'smart';
+    }
+    // 更新方案状态显示
+    updateSchemeStatusDisplay();
+    
+    // 修复：运行智能选址后，更新核心指标和供需表格
+    updateCoreMetrics();
+    generateSupplyDemandTable(getActiveSupplyTimeSlot(), 'smart');
+    
+    // 更新标记显示，确保当前方案的标记正确显示
+    updateSelectedScheme();
 }
 
 
@@ -2918,34 +2970,217 @@ function renderSmartLocations(geoJson) {
 
 
 // 清除智能选址
-function clearSmartLocations() {
-    smartMarkers.forEach(item => map.removeOverlay(item.marker));
-    smartCircles.forEach(circle => map.removeOverlay(circle));
+function clearSmartLocations(silent) {
+    if (map) {
+        smartMarkers.forEach(item => map.removeOverlay(item.marker));
+        smartCircles.forEach(circle => map.removeOverlay(circle));
+    }
     smartMarkers = [];
     smartCircles = [];
     document.getElementById('status-smart').textContent = '0';
     document.getElementById('smart-coverage').textContent = '0%';
     document.getElementById('smart-coverage-bar').style.width = '0%';
     updateSchemeStatusDisplay();
-    showToast('智能选址点已清空');
+    // 更新标记显示
+    updateSelectedScheme();
+    if (!silent) {
+        showToast('智能选址点已清空');
+    }
 }
 
-// 更新服务半径显示
-function updateRadiusValue() {
+// 清除调度路径
+function clearDispatch(silent) {
+    // 清除调度模式标志
+    window.isDispatchingActive = false;
+
+    if (map) {
+        dispatchLines.forEach(line => map.removeOverlay(line));
+        dispatchMarkers.forEach(marker => map.removeOverlay(marker));
+    }
+    dispatchLines = [];
+    dispatchMarkers = [];
+    activeDispatchRouteIndex = null;
+
+    if (window.currentInfoWindow && map) {
+        map.closeInfoWindow(window.currentInfoWindow);
+        window.currentInfoWindow = null;
+    }
+    
+    // 清除临时路段高亮折线
+    if (tempSegmentLine && map) {
+        map.removeOverlay(tempSegmentLine);
+        tempSegmentLine = null;
+    }
+    
+    // ⭐修复：重新显示智能和人工选址标记！
+    console.log('恢复显示智能和人工选址标记！');
+    smartMarkers.forEach(item => {
+        if (item.marker && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    smartCircles.forEach(circle => {
+        if (!circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    manualMarkers.forEach(item => {
+        if (item.marker && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    manualCircles.forEach(circle => {
+        if (!circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    
+    document.getElementById('status-dispatch').textContent = '0';
+    document.getElementById('dispatch-count').textContent = '0 辆';
+    document.getElementById('dispatch-bikes').textContent = '0 辆';
+    document.getElementById('dispatch-distance').textContent = '0 km';
+    document.getElementById('dispatch-time-result').textContent = '0 分钟';
+    document.getElementById('dispatch-cost').textContent = '¥0';
+    document.getElementById('dispatch-table-body').innerHTML = '<tr><td colspan="7" style="color:#999;padding:10px;text-align:center;">请运行调度优化</td></tr>';
+    setDispatchAssignmentStatus('', true);
+    if (!silent) {
+        showToast('调度路径已清空');
+    }
+}
+
+
+
+// 防抖函数
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// 更新服务半径显示（debounce 500ms，避免频繁请求）
+const updateRadiusValue = debounce(async function() {
     const radius = document.getElementById('service-radius').value;
     document.getElementById('radius-value').textContent = radius;
     currentServiceRadius = parseInt(radius);
 
-    // 更新已有的覆盖范围圆圈
+    const currentSeq = ++radiusUpdateSeq;
+    console.log('updateRadiusValue called with radius:', currentServiceRadius, 'seq:', currentSeq);
+
+    // 更新已有的覆盖范围圆圈（同步执行，不需要序列号检查）
     updateCoverageCircles();
-}
+
+    // 调用后端API重新计算智能方案的覆盖率
+    if (smartMarkers.length > 0) {
+        const parkingPoints = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        console.log('Calling /api/calculate-coverage with:', {
+            parking_points: parkingPoints,
+            service_radius: currentServiceRadius
+        });
+        try {
+            const response = await fetch('/api/calculate-coverage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    parking_points: parkingPoints,
+                    service_radius: currentServiceRadius
+                })
+            });
+            const result = await response.json();
+
+            if (currentSeq !== radiusUpdateSeq) {
+                console.log('Ignoring stale smart coverage response, currentSeq:', currentSeq, 'radiusUpdateSeq:', radiusUpdateSeq);
+                return;
+            }
+
+            console.log('Response from /api/calculate-coverage:', result);
+            if (result.coverage !== undefined) {
+                smartMetrics.coverage = result.coverage;
+                smartMetrics.avg_distance = result.avg_distance || 0;
+                smartMetrics.balance = result.balance || 0;
+                console.log('Updated smartMetrics:', smartMetrics);
+                updateSmartCoverage();
+                updateCoreMetrics();
+                updateSchemeStatusDisplay();
+            }
+        } catch (error) {
+            console.error('计算覆盖率失败:', error);
+        }
+    }
+
+    // 同时也重新计算人工方案的指标（调用后端API，保持一致！）
+    if (manualMarkers.length > 0) {
+        const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        console.log('Calling /api/calculate-coverage for manual with:', {
+            parking_points: points,
+            service_radius: currentServiceRadius
+        });
+        try {
+            const response = await fetch('/api/calculate-coverage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    parking_points: points,
+                    service_radius: currentServiceRadius
+                })
+            });
+            const result = await response.json();
+
+            if (currentSeq !== radiusUpdateSeq) {
+                console.log('Ignoring stale manual coverage response, currentSeq:', currentSeq, 'radiusUpdateSeq:', radiusUpdateSeq);
+                return;
+            }
+
+            console.log('Response from /api/calculate-coverage for manual:', result);
+            if (result.coverage !== undefined) {
+                manualLocationMetrics = {
+                    coverage: result.coverage,
+                    avg_distance: result.avg_distance || 0,
+                    balance: result.balance || 0,
+                    capacity: result.capacity || 0
+                };
+                console.log('Updated manualLocationMetrics:', manualLocationMetrics);
+                updateManualCoverage();
+                updateCoreMetrics();
+            }
+        } catch (error) {
+            console.error('计算人工方案覆盖率失败:', error);
+        }
+    }
+}, 500);
 
 // 更新覆盖范围圆圈
 function updateCoverageCircles() {
+    // 保存当前的调度路线数据
+    const currentDispatchGeoJson = window.currentDispatchGeoJson;
+    
+    // 保存当前的选址标记和覆盖范围显示状态
+    const smartMarkersVisible = smartMarkers.map(item => item.marker && item.marker._isOnMap);
+    const manualMarkersVisible = manualMarkers.map(item => item.marker && item.marker._isOnMap);
+    const smartCirclesVisible = smartCircles.map(circle => circle._isOnMap);
+    const manualCirclesVisible = manualCircles.map(circle => circle._isOnMap);
+    
     // 更新智能选址的覆盖范围
     smartCircles.forEach((circle, idx) => {
-        if (smartMarkers[idx] && smartMarkers[idx].marker) {
-            const pos = smartMarkers[idx].marker.getPosition();
+        if (smartMarkers[idx]) {
+            const pos = new BMap.Point(smartMarkers[idx].lng, smartMarkers[idx].lat);
             map.removeOverlay(circle);
             const newCircle = new BMap.Circle(
                 pos,
@@ -2954,7 +3189,9 @@ function updateCoverageCircles() {
                     strokeColor: '#1a73e8',
                     strokeWeight: 1,
                     fillColor: '#1a73e8',
-                    fillOpacity: 0.15
+                    fillOpacity: 0.15,
+                    zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+                    enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
                 }
             );
             map.addOverlay(newCircle);
@@ -2964,8 +3201,8 @@ function updateCoverageCircles() {
 
     // 更新人工选址的覆盖范围
     manualCircles.forEach((circle, idx) => {
-        if (manualMarkers[idx] && manualMarkers[idx].marker) {
-            const pos = manualMarkers[idx].marker.getPosition();
+        if (manualMarkers[idx]) {
+            const pos = new BMap.Point(manualMarkers[idx].lng, manualMarkers[idx].lat);
             map.removeOverlay(circle);
             const newCircle = new BMap.Circle(
                 pos,
@@ -2974,13 +3211,63 @@ function updateCoverageCircles() {
                     strokeColor: '#ea4335',
                     strokeWeight: 1,
                     fillColor: '#ea4335',
-                    fillOpacity: 0.15
+                    fillOpacity: 0.15,
+                    zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+                    enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
                 }
             );
             map.addOverlay(newCircle);
             manualCircles[idx] = newCircle;
         }
     });
+
+    // 重新渲染调度路线，确保在最上层
+    if (currentDispatchGeoJson) {
+        renderDispatch(currentDispatchGeoJson);
+    }
+    
+    // 恢复选址标记的显示状态
+    smartMarkers.forEach((item, idx) => {
+        if (item.marker && smartMarkersVisible[idx] && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    
+    manualMarkers.forEach((item, idx) => {
+        if (item.marker && manualMarkersVisible[idx] && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    
+    // 恢复覆盖范围圆圈的显示状态
+    smartCircles.forEach((circle, idx) => {
+        if (smartCirclesVisible[idx] && !circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    
+    manualCircles.forEach((circle, idx) => {
+        if (manualCirclesVisible[idx] && !circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+
+    // 重新计算并更新覆盖率
+    updateSmartCoverage();
+    updateManualCoverage();
+    updateCoreMetrics();
 }
 
 
@@ -2993,9 +3280,6 @@ function updateCoverageCircles() {
 
 
 function copySmartToManual() {
-
-
-
     if (smartMarkers.length === 0) {
 
 
@@ -3018,13 +3302,29 @@ function copySmartToManual() {
 
     clearManualLocations();
 
+    if (window.currentInfoWindow && map) {
+        map.closeInfoWindow(window.currentInfoWindow);
+        window.currentInfoWindow = null;
+    }
+
+    console.log('开始复制智能选址到人工，共', smartMarkers.length, '个智能选址点');
+
+
+
+
+
 
 
     smartMarkers.forEach((smart, idx) => {
+        console.log('处理第', idx + 1, '个智能选址点:', smart);
 
 
 
         const lat = smart.lat;
+
+
+
+
 
 
 
@@ -3036,11 +3336,28 @@ function copySmartToManual() {
 
 
 
-        // 直接使用BD09坐标，不需要转换
+        console.log('智能选址点坐标:', { lat, lng });
+
+        // smart.lat 和 smart.lng 已经是 normalizeBikeToBd09 转换后的坐标，直接使用
+        const normalized = { lng, lat };
+
+        console.log('使用人工点坐标:', { lng: normalized.lng, lat: normalized.lat });
 
 
 
-        const point = new BMap.Point(lng, lat);
+
+
+
+
+        const point = new BMap.Point(normalized.lng, normalized.lat);
+
+
+
+
+
+
+
+        console.log('创建人工点位置:', { lng: point.lng, lat: point.lat });
 
 
 
@@ -3051,7 +3368,16 @@ function copySmartToManual() {
         // 使用 BMap.Symbol 创建三三角形标记（红扲常
 
 
+
+
+
+
+
         const icon = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+
+
+
+
 
 
 
@@ -3059,7 +3385,15 @@ function copySmartToManual() {
 
 
 
+
+
+
+
             strokeWeight: 1,
+
+
+
+
 
 
 
@@ -3067,11 +3401,23 @@ function copySmartToManual() {
 
 
 
+
+
+
+
             fillColor: '#ea4335',
 
 
 
+
+
+
+
             fillOpacity: 0.9
+
+
+
+
 
 
 
@@ -3083,39 +3429,71 @@ function copySmartToManual() {
 
 
 
-        const marker = new BMap.Marker(point, { icon, enableDragging: true });
+        const marker = new BMap.Marker(point, { icon, enableDragging: currentMode === 'add' });
 
+        console.log('创建人工点标记:', marker);
 
-
-
-
-
+        console.log('准备绑定事件监听器...');
 
         // 拽结束事件
 
 
 
+
+
+
+
         marker.addEventListener('dragend', function(e) {
+            // 检查是否在人工选址模式
+            if (currentMode !== 'add') {
+                // 恢复到原位置
+                const idx = manualMarkers.findIndex(m => m.marker === this);
+                if (idx >= 0) {
+                    const oldPoint = new BMap.Point(manualMarkers[idx].lng, manualMarkers[idx].lat);
+                    this.setPosition(oldPoint);
+                }
+                showToast('请先点击"开始人工选址"按钮进入编辑模式');
+                return;
+            }
+            
+            const newRawPoint = e.point;
+            
+            // 转换坐标系（拖拽后的坐标也需要转换）
+            const newNormalized = normalizeBikeToBd09(newRawPoint.lng, newRawPoint.lat);
+            if (!newNormalized) {
+                console.warn('拖拽后坐标转换失败:', { lng: newRawPoint.lng, lat: newRawPoint.lat });
+                return;
+            }
+            
+            const newLat = newNormalized.lat;
+            const newLng = newNormalized.lng;
+            
+            // 检查是否在信息学部边界内
+            if (!isInsideBoundary(newLat, newLng)) {
+                // 恢复到原位置
+                const idx = manualMarkers.findIndex(m => m.marker === this);
+                if (idx >= 0) {
+                    const oldPoint = new BMap.Point(manualMarkers[idx].lng, manualMarkers[idx].lat);
+                    this.setPosition(oldPoint);
+                }
+                showToast('请在信息学部范围内选择！');
+                showCampusBoundary();
+                return;
+            }
+            
+            const newPoint = new BMap.Point(newLng, newLat);
 
-
-
-            const newPoint = e.point;
-
-
+            console.log('人工点拖拽后位置:', { lng: newPoint.lng, lat: newPoint.lat });
 
             const idx = manualMarkers.findIndex(m => m.marker === this);
 
-
-
             if (idx >= 0) {
 
-
-
-                manualMarkers[idx].lat = newPoint.lat;
+                manualMarkers[idx].lat = newLat;
 
 
 
-                manualMarkers[idx].lng = newPoint.lng;
+                manualMarkers[idx].lng = newLng;
 
 
 
@@ -3158,7 +3536,15 @@ function copySmartToManual() {
 
 
 
-                            fillOpacity: 0.15
+                            fillOpacity: 0.15,
+
+
+
+                            zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+
+
+
+                            enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
 
 
 
@@ -3178,23 +3564,8 @@ function copySmartToManual() {
 
 
 
-                // 重新计算指标
-
-
-
-                const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-
-
-
-                manualLocationMetrics = calculateCoreMetrics(points);
-
-
-
-                updateCoreMetrics();
-
-
-
-                updateManualCoverage();
+                // 重要：拖拽后调用后端API重新计算覆盖率，确保与智能选址计算方式一致
+                calculateManualCoverageFromAPI();
 
 
 
@@ -3215,28 +3586,11 @@ function copySmartToManual() {
 
 
         marker.addEventListener('rightclick', function(e) {
-
-
-
-            // 只有在人工选址模式下才允殸删除
-
-
-
+            // 检查是否在人工选址模式
             if (currentMode !== 'add') {
-
-
-
-                showToast('请先进入人工选址模式再删除选址常');
-
-
-
+                showToast('请先点击"开始人工选址"按钮进入编辑模式');
                 return;
-
-
-
             }
-
-
 
             const idx = manualMarkers.findIndex(m => m.marker === this);
 
@@ -3245,41 +3599,34 @@ function copySmartToManual() {
             if (idx >= 0) {
 
 
-
                 map.removeOverlay(this);
-
 
 
                 if (manualCircles[idx]) {
 
 
-
                     map.removeOverlay(manualCircles[idx]);
-
 
 
                 }
 
 
-
                 manualMarkers.splice(idx, 1);
-
-
-
                 manualCircles.splice(idx, 1);
 
-
-
+                // 重要：修改人工选址时重置缓存的指标，这样下次会重新计算
+                manualLocationMetrics = null;
+                
+                // 重要：修改人工选址时不自动重新计算核心指标，避免前端计算错误！
+                // 如果需要重新计算，点击"保存人工选址"按钮！
                 updateManualCoverage();
-
-
-
+                updateCoreMetrics();
                 document.getElementById('status-manual').textContent = manualMarkers.length;
-
+                // 更新系统概览数据
+                updateSystemStatus();
 
 
             }
-
 
 
         });
@@ -3290,38 +3637,17 @@ function copySmartToManual() {
 
 
 
-        // 弹出信息
-
-
-
-        const deleteButton = currentMode === 'add' ? `<a href="javascript:void(0)" onclick="deleteManualMarker(this)">删除</a>` : '';
-
-
-
+        // ⭐修复：生成带序号的名称，与智能选址点保持一致
+        const pointName = `人工选址点${manualMarkers.length + 1}`;
+        
+        // 弹出信息（与智能选址点保持一致）
         const popupContent = `
-
-
-
             <div class="popup-content">
-
-
-
-                <div class="popup-title">人工选址</div>
-
-
-
+                <div class="popup-title">${pointName}</div>
+                <div class="popup-row"><span class="popup-label">名称</span><span class="popup-value">${pointName}</span></div>
+                <div class="popup-row"><span class="popup-label">容量</span><span class="popup-value">40 车位</span></div>
                 <div class="popup-row"><span class="popup-label">坐标</span><span class="popup-value">${lat.toFixed(5)}, ${lng.toFixed(5)}</span></div>
-
-
-
-                ${currentMode === 'add' ? `<div class="popup-row"><span class="popup-label">操作</span><span class="popup-value">${deleteButton}</span></div>` : ''}
-
-
-
             </div>
-
-
-
         `;
 
 
@@ -3342,20 +3668,6 @@ function copySmartToManual() {
 
 
 
-        marker.openInfoWindow(infoWindow);
-
-
-
-
-
-
-
-        map.addOverlay(marker);
-
-
-
-        manualMarkers.push({ marker, lat, lng, type: 'manual' });
-
 
 
 
@@ -3364,124 +3676,86 @@ function copySmartToManual() {
 
         // 覆盖范围常
 
+        // 先添加标记，再添加点击事件
+        map.addOverlay(marker);
+
+        // 添加点击事件（使用闭包保存当前标记和信息窗口）
+        const savedMarker = marker;
+        const savedInfoWindow = infoWindow;
+        marker.addEventListener('click', function() {
+            map.openInfoWindow(savedInfoWindow, savedMarker.getPosition());
+        });
 
         const circle = new BMap.Circle(
-
-
-
             point,
-
-
-
             currentServiceRadius,
-
-
-
             {
-
-
-
                 strokeColor: '#ea4335',
-
-
-
                 strokeWeight: 1,
-
-
-
                 fillColor: '#ea4335',
-
-
-
-                fillOpacity: 0.15
-
-
-
+                fillOpacity: 0.15,
+                zIndex: 9900, // 设置较低的zIndex，确保在调度路径之下
+                enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
             }
-
-
-
         );
 
-
-
         map.addOverlay(circle);
-
-
-
         manualCircles.push(circle);
 
+        manualMarkers.push({ marker, lat: normalized.lat, lng: normalized.lng, name: pointName, type: 'manual', serviceRadius: currentServiceRadius, infoWindow: infoWindow });
 
+        // 标记添加到地图后再打开信息窗口
+        // marker.openInfoWindow(infoWindow); // 暂时注释掉，避免报错
 
     });
-
-
-
-
 
 
 
     document.getElementById('status-manual').textContent = manualMarkers.length;
 
 
-
     
-
-
-
-    // 保存人工方案的真实指标数常
-
-
-    const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-
-
-
-    manualLocationMetrics = calculateCoreMetrics(points);
-
+    // ⭐修复：确保复制时指标完整，特别是 capacity 字段
+    manualLocationMetrics = JSON.parse(JSON.stringify(smartMetrics));
+    
+    // 如果 capacity 缺失或为 0，手动计算一下
+    if (!manualLocationMetrics.capacity || manualLocationMetrics.capacity === 0) {
+        manualLocationMetrics.capacity = smartMarkers.length * 40;
+        console.log('手动计算人工方案容量:', manualLocationMetrics.capacity);
+    }
+    
+    console.log('复制后的人工方案指标:', manualLocationMetrics);
 
 
     
-
-
-
     // 强制切换到人工方案显示
-
-
     selectedScheme = 'manual';
-
-
 
     document.getElementById('selected-scheme').value = 'manual';
 
+    // ⭐修复：调用 updateSelectedScheme 函数来更新显示状态
+    updateSelectedScheme();
 
-
-
-
-
-
+    // 使用与智能方案相同的覆盖率显示
     updateManualCoverage();
-
-
 
     updateCoreMetrics();
 
-
-
     updateUsageChart();
 
+    // 重新渲染调度路线，确保在最上层
+    if (window.currentDispatchGeoJson) {
+        renderDispatch(window.currentDispatchGeoJson);
+    }
 
 
     loadDemandPrediction();
 
 
-
     updateSchemeStatusDisplay();
 
 
-
     showToast('智能选址方案已复制到人工方案');
-
-
 
 }
 
@@ -3495,7 +3769,6 @@ function copySmartToManual() {
 
 
 function updateSmartCoverage() {
-
 
 
     if (smartMarkers.length === 0) {
@@ -3522,15 +3795,16 @@ function updateSmartCoverage() {
 
 
 
-    const points = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
 
 
 
-    const metrics = calculateCoreMetrics(points);
 
 
 
-    const coverage = metrics.coverage * 100;
+
+
+    // 使用smartMetrics中的覆盖率，确保与后端计算结果一致
+    const coverage = smartMetrics.coverage * 100;
 
 
 
@@ -3554,53 +3828,49 @@ function updateSmartCoverage() {
 
 
 function updateManualCoverage() {
-
-
-
     if (manualMarkers.length === 0) {
-
-
-
         document.getElementById('manual-coverage').textContent = '0%';
-
-
-
         document.getElementById('manual-coverage-bar').style.width = '0%';
-
-
-
         return;
-
-
-
     }
 
-
-
-
-
-
-
-    const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-
-
-
-    const metrics = calculateCoreMetrics(points);
-
-
+    // 优先使用缓存的指标，如果没有缓存则调用后端API计算（与智能选址保持一致）
+    let metrics;
+    if (manualLocationMetrics && manualLocationMetrics.coverage !== undefined) {
+        metrics = manualLocationMetrics;
+    } else {
+        // 调用后端API计算，确保与智能选址计算方式一致
+        const points = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
+        fetch('/api/calculate-coverage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parking_points: points,
+                service_radius: currentServiceRadius
+            })
+        }).then(response => response.json())
+          .then(result => {
+              if (result.coverage !== undefined) {
+                  manualLocationMetrics = {
+                      coverage: result.coverage,
+                      avg_distance: result.avg_distance || 0,
+                      balance: result.balance || 0,
+                      capacity: result.capacity || 0
+                  };
+                  const coverage = manualLocationMetrics.coverage * 100;
+                  document.getElementById('manual-coverage').textContent = coverage.toFixed(1) + '%';
+                  document.getElementById('manual-coverage-bar').style.width = coverage + '%';
+                  updateCoreMetrics();
+              }
+          }).catch(error => {
+              console.error('计算人工方案覆盖率失败:', error);
+          });
+        return;
+    }
 
     const coverage = metrics.coverage * 100;
-
-
-
     document.getElementById('manual-coverage').textContent = coverage.toFixed(1) + '%';
-
-
-
     document.getElementById('manual-coverage-bar').style.width = coverage + '%';
-
-
-
 }
 
 
@@ -3626,15 +3896,13 @@ function getSchemeMetricsByType(type) {
             return null;
         }
 
-        const smartPoints = smartMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-        const fallback = calculateCoreMetrics(smartPoints);
+        // 确保smartMetrics有效
+        if (!smartMetrics || smartMetrics.coverage === undefined) {
+            return null;
+        }
 
-        return {
-            coverage: smartMetrics.coverage > 0 ? smartMetrics.coverage : fallback.coverage,
-            avg_distance: smartMetrics.avg_distance > 0 ? smartMetrics.avg_distance : fallback.avg_distance,
-            balance: smartMetrics.balance > 0 ? smartMetrics.balance : fallback.balance,
-            capacity: smartMetrics.capacity > 0 ? smartMetrics.capacity : fallback.capacity
-        };
+        // 使用smartMetrics，确保与后端计算结果一致
+        return smartMetrics;
     }
 
     if (type === 'manual') {
@@ -3642,12 +3910,14 @@ function getSchemeMetricsByType(type) {
             return null;
         }
 
-        if (manualLocationMetrics) {
+        // 如果已经有缓存的metrics，直接使用
+        if (manualLocationMetrics && manualLocationMetrics.coverage !== undefined) {
             return manualLocationMetrics;
         }
 
-        const manualPoints = manualMarkers.map(m => ({ lat: m.lat, lng: m.lng }));
-        return calculateCoreMetrics(manualPoints);
+        // 否则调用后端API重新计算并缓存（与智能选址保持一致）
+        calculateManualCoverageFromAPI();
+        return null;  // 返回null，等待异步更新完成后的回调处理
     }
 
     return null;
@@ -3689,587 +3959,625 @@ function getEffectiveScheme() {
         return selectedScheme;
     }
 
-    const analysis = getComparisonAnalysis();
-    if (analysis.recommendedScheme !== 'none') {
-        return analysis.recommendedScheme;
-    }
-
+    // 优先使用智能选址方案（如果有的话）
     if (smartMarkers.length > 0) {
         return 'smart';
     }
 
+    // 否则使用人工选址方案（如果有的话）
     if (manualMarkers.length > 0) {
         return 'manual';
     }
 
+    // 最后默认使用智能选址方案
     return 'smart';
 }
 
 
 
+function getMarkerPositionBD09(item) {
+    if (item && item.marker && typeof item.marker.getPosition === 'function') {
+        const pos = item.marker.getPosition();
+        if (pos && Number.isFinite(Number(pos.lat)) && Number.isFinite(Number(pos.lng))) {
+            return { lat: Number(pos.lat), lng: Number(pos.lng) };
+        }
+    }
+    if (item && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))) {
+        return { lat: Number(item.lat), lng: Number(item.lng) };
+    }
+    return null;
+}
 
+function getParkingPointName(item, idx, scheme) {
+    const dataName = item?.data?.name || item?.name;
+    if (dataName) return String(dataName);
+    return scheme === 'smart' ? `智能点${idx + 1}` : `人工点${idx + 1}`;
+}
 
+function updateDispatchSummaryFromResult(dispatchResult) {
+    const geojson = dispatchResult?.geojson || { type: 'FeatureCollection', features: [] };
+    const metrics = dispatchResult?.metrics || {};
+    const features = Array.isArray(geojson.features) ? geojson.features : [];
+    const lineFeatures = features.filter(f => f?.geometry?.type === 'LineString');
 
+    const totalVehicles = Number(metrics.vehicle_count || metrics.total_vehicles || lineFeatures.length || 0);
+    const totalTransfer = Number(
+        metrics.total_transfer ||
+        lineFeatures.reduce((sum, f) => sum + (Number(f?.properties?.transfer || f?.properties?.total_transfer || 0) || 0), 0)
+    );
+    const totalDistanceM = Number(metrics.total_distance_m || metrics.total_distance || 0);
 
-// 生成供需状态桨常
+    const statusDispatch = document.getElementById('status-dispatch');
+    const dispatchCount = document.getElementById('dispatch-count');
+    const dispatchBikes = document.getElementById('dispatch-bikes');
+    const dispatchDistance = document.getElementById('dispatch-distance');
+    const dispatchTime = document.getElementById('dispatch-time-result');
+    const dispatchCost = document.getElementById('dispatch-cost');
 
+    if (statusDispatch) statusDispatch.textContent = String(totalVehicles);
+    if (dispatchCount) dispatchCount.textContent = `${totalVehicles} 辆`;
+    if (dispatchBikes) dispatchBikes.textContent = `${totalTransfer} 辆`;
+    if (dispatchDistance) dispatchDistance.textContent = `${(totalDistanceM / 1000).toFixed(2)} km`;
 
-function generateSupplyDemandTable(timeSlot) {
+    const estimatedMinutes = Math.round((totalDistanceM / 1000 / 15) * 60);
+    if (dispatchTime) dispatchTime.textContent = `${estimatedMinutes} 分钟`;
 
+    const cost = ((totalDistanceM / 1000) * 1.5).toFixed(2);
+    if (dispatchCost) dispatchCost.textContent = `¥${cost}`;
 
+    if (typeof updateDispatchTable === 'function') {
+        updateDispatchTable(lineFeatures);
+    }
 
+    // 更新系统状态
+    if (typeof updateSystemStatus === 'function') {
+        updateSystemStatus();
+    }
+}
+
+// 生成供需状态表格（基于热力图数据 + 时段人流规则）
+function generateSupplyDemandTable(timeSlot, scheme, onComplete) {
     console.log('generateSupplyDemandTable called with timeSlot:', timeSlot);
+    console.log('demandPointsData length:', demandPointsData ? demandPointsData.length : 'null/undefined');
+    console.log('currentServiceRadius:', currentServiceRadius);
+    console.log('scheme:', scheme);
 
-    const _v2Tbody = document.getElementById('supply-demand-body');
-    if (!_v2Tbody) {
-        return;
-    }
-
-    const _v2HasSmartPoints = smartMarkers.length > 0;
-    const _v2HasManualPoints = manualMarkers.length > 0;
-    if (!_v2HasSmartPoints && !_v2HasManualPoints) {
-        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
-        return;
-    }
-
-    let _v2ActiveScheme = selectedScheme || 'auto';
-    if (_v2ActiveScheme === 'auto') {
-        _v2ActiveScheme = getEffectiveScheme();
-    } else if (_v2ActiveScheme === 'smart' && !_v2HasSmartPoints) {
-        _v2ActiveScheme = _v2HasManualPoints ? 'manual' : 'none';
-    } else if (_v2ActiveScheme === 'manual' && !_v2HasManualPoints) {
-        _v2ActiveScheme = _v2HasSmartPoints ? 'smart' : 'none';
-    }
-
-    const _v2Markers = _v2ActiveScheme === 'smart' ? smartMarkers : (_v2ActiveScheme === 'manual' ? manualMarkers : []);
-    if (!_v2Markers || _v2Markers.length === 0) {
-        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
-        return;
-    }
-
-    const _v2MarkerCoords = _v2Markers.map((item, idx) => {
-        if (item && item.marker && typeof item.marker.getPosition === 'function') {
-            const pos = item.marker.getPosition();
-            if (pos && Number.isFinite(pos.lat) && Number.isFinite(pos.lng)) {
-                return { idx, lat: pos.lat, lng: pos.lng };
-            }
-        }
-        if (item && item.lat != null && item.lng != null) {
-            return { idx, lat: item.lat, lng: item.lng };
-        }
-        return { idx, lat: NaN, lng: NaN };
-    });
-
-    const _v2CoordsSig = _v2MarkerCoords
-        .map(m => Number.isFinite(m.lat) && Number.isFinite(m.lng)
-            ? `${m.idx}:${m.lat.toFixed(6)},${m.lng.toFixed(6)}`
-            : `${m.idx}:na`)
-        .join('|');
-    const _v2CacheKey = `${timeSlot}|${_v2ActiveScheme}|${_v2CoordsSig}`;
-
-    const _v2RenderRows = (rows) => {
-        _v2Tbody.innerHTML = rows.map(item => {
-            const status = item.status === 'surplus'
-                ? '<span style="color:#27ae60">过剩</span>'
-                : (item.status === 'shortage'
-                    ? '<span style="color:#e74c3c">不足</span>'
-                    : '<span style="color:#999">平衡</span>');
-            const transferStr = item.transfer !== 0 ? Math.abs(item.transfer) + '辆' : '-';
-            return `<tr>
-                <td>${item.name}</td>
-                <td>${item.current}</td>
-                <td>${item.demand}</td>
-                <td>${status}</td>
-                <td>${transferStr}</td>
-            </tr>`;
-        }).join('');
-    };
-
-    if (supplyDemandCalcCache[_v2CacheKey]) {
-        _v2RenderRows(supplyDemandCalcCache[_v2CacheKey]);
-        return;
-    }
-
-    const _v2Rules = {
-        morning: { '宿舍': -1.2, '教学楼': 1.0, '食堂': 0.3, '校门': 0.3, '图书馆': 0.2, '其他': 0.1 },
-        noon: { '食堂': 0.8, '教学楼': -0.6, '宿舍': 0.4, '图书馆': 0.2, '其他': 0.2 },
-        evening: { '宿舍': -1.0, '教学楼': 0.8, '食堂': 0.3, '图书馆': 0.3, '其他': 0.4 }
-    };
-    const _v2Rule = _v2Rules[timeSlot] || _v2Rules.morning;
-
-    const _v2FallbackPoiSamples = [
-        { lat: 30.5339, lng: 114.3658, category: '宿舍', weight: 1.0 },
-        { lat: 30.5338, lng: 114.3637, category: '宿舍', weight: 0.8 },
-        { lat: 30.5331, lng: 114.3654, category: '宿舍', weight: 0.7 },
-        { lat: 30.5317, lng: 114.3660, category: '教学楼', weight: 0.9 },
-        { lat: 30.5313, lng: 114.3679, category: '教学楼', weight: 0.6 },
-        { lat: 30.5312, lng: 114.3658, category: '教学楼', weight: 0.5 },
-        { lat: 30.5336, lng: 114.3648, category: '食堂', weight: 0.9 },
-        { lat: 30.5325, lng: 114.3648, category: '食堂', weight: 0.7 },
-        { lat: 30.5357, lng: 114.3662, category: '食堂', weight: 0.6 },
-        { lat: 30.5341, lng: 114.3668, category: '图书馆', weight: 0.5 },
-        { lat: 30.5299, lng: 114.3670, category: '校门', weight: 0.5 },
-        { lat: 30.5320, lng: 114.3665, category: '其他', weight: 0.3 }
-    ];
-
-    if (!pointsV2Cache && !pointsV2LoadFailed) {
-        if (!pointsV2LoadingPromise) {
-            pointsV2LoadingPromise = fetch('./pointsV2.geojson', { cache: 'no-store' })
-                .then(res => {
-                    if (!res.ok) {
-                        throw new Error('HTTP ' + res.status);
-                    }
-                    return res.json();
-                })
-                .then(data => {
-                    const features = Array.isArray(data?.features) ? data.features : [];
-                    pointsV2Cache = features
-                        .map(feature => {
-                            const coords = feature?.geometry?.coordinates;
-                            if (!Array.isArray(coords) || coords.length < 2) {
-                                return null;
-                            }
-                            const lng = Number(coords[0]);
-                            const lat = Number(coords[1]);
-                            if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
-                                return null;
-                            }
-                            return {
-                                lng,
-                                lat,
-                                category: feature?.properties?.category || '其他',
-                                weight: Number(feature?.properties?.weight) || 1.0
-                            };
-                        })
-                        .filter(Boolean);
-
-                    if (!pointsV2Cache.length) {
-                        throw new Error('pointsV2.geojson 无可用点位');
-                    }
-                })
-                .catch(err => {
-                    pointsV2LoadFailed = true;
-                    console.warn('pointsV2.geojson 加载失败，回退到内置POI样本:', err);
-                })
-                .finally(() => {
-                    pointsV2LoadingPromise = null;
-                });
-        }
-
-        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">正在加载供需POI数据...</td></tr>';
-        pointsV2LoadingPromise?.then(() => generateSupplyDemandTable(timeSlot));
-        return;
-    }
-
-    const _v2PoiSamples = (Array.isArray(pointsV2Cache) && pointsV2Cache.length > 0)
-        ? pointsV2Cache
-        : _v2FallbackPoiSamples;
-
-    let _v2TotalDemand = 0;
-    const _v2Drafts = [];
-
-    _v2MarkerCoords.forEach(({ idx, lat, lng }) => {
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-            return;
-        }
-
-        let _v2Score = 0;
-        _v2PoiSamples.forEach(poi => {
-            const directDist = Math.hypot(lng - poi.lng, lat - poi.lat) * 111000;
-            let dist = directDist;
-
-            if (typeof wgs84ToBd09 === 'function') {
-                const converted = wgs84ToBd09(poi.lng, poi.lat);
-                if (Number.isFinite(converted?.lng) && Number.isFinite(converted?.lat)) {
-                    const convertedDist = Math.hypot(lng - converted.lng, lat - converted.lat) * 111000;
-                    dist = Math.min(directDist, convertedDist);
-                }
-            }
-
-            if (dist < 300) {
-                const weight = (poi.weight || 1.0) / Math.max(15, dist);
-                _v2Score += weight * (_v2Rule[poi.category] || 0);
-            }
-        });
-
-        const _v2Demand = 15 + ((idx * 3) % 20);
-        _v2TotalDemand += _v2Demand;
-
-        _v2Drafts.push({
-            name: `${_v2ActiveScheme === 'smart' ? '智能点' : '人工点'}${idx + 1}`,
-            demand: _v2Demand,
-            rawSupply: _v2Demand + _v2Score * 120
-        });
-    });
-
-    if (_v2Drafts.length === 0) {
-        _v2Tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
-        return;
-    }
-
-    const _v2TargetTotalSupply = _v2TotalDemand * 1.05;
-    const _v2CurrentTotalSupply = _v2Drafts.reduce((sum, s) => sum + s.rawSupply, 0);
-    const _v2SafeTotalSupply = Math.abs(_v2CurrentTotalSupply) < 1e-6 ? 1 : _v2CurrentTotalSupply;
-    const _v2GlobalScale = _v2TargetTotalSupply / _v2SafeTotalSupply;
-
-    const _v2Rows = _v2Drafts.map(s => {
-        const current = Math.max(2, Math.round(s.rawSupply * _v2GlobalScale));
-        const transfer = s.demand - current;
-
-        let status = 'balanced';
-        if (transfer < -2) {
-            status = 'surplus';
-        } else if (transfer > 2) {
-            status = 'shortage';
-        }
-
-        return {
-            name: s.name,
-            current,
-            demand: s.demand,
-            status,
-            transfer
-        };
-    });
-
-    supplyDemandCalcCache[_v2CacheKey] = _v2Rows;
-    _v2RenderRows(_v2Rows);
-    return;
-
-
-
-
-
-
-
-    const effectiveScheme = getEffectiveScheme();
+    const effectiveScheme = scheme || getEffectiveScheme();
     const markers = effectiveScheme === 'smart' ? smartMarkers : manualMarkers;
 
-
-
-    // 需求模拟规则（早高峰、午高峰、晚高峰）
-    // 早高峰：宿舍 → 教学楼（权重 0.7），宿舍 → 食堂（0.1），宿舍 → 其他（0.2）
-    // 午高峰：教学楼 → 食堂（0.6），教学楼 → 宿舍（0.2），其他 → 食堂（0.2）
-    // 晚高峰：教学楼 → 宿舍（0.7），食堂 → 宿舍（0.2），其他 → 宿舍（0.1）
-    
-    const zoneRules = {
-        'morning': {
-            'dorm_main': 1.0, 'dorm_secondary': 0.8, 'teaching_main': -0.7,
-            'teaching_secondary': -0.5, 'canteen': -0.1, 'library': -0.3, 'other': -0.2
-        },
-        'noon': {
-            'dorm_main': -0.2, 'dorm_secondary': -0.1, 'teaching_main': 0.5,
-            'teaching_secondary': 0.3, 'canteen': -0.6, 'library': 0.2, 'other': -0.2
-        },
-        'evening': {
-            'dorm_main': -0.9, 'dorm_secondary': -0.7, 'teaching_main': 0.6,
-            'teaching_secondary': 0.4, 'canteen': -0.2, 'library': -0.1, 'other': -0.1
-        }
-    };
-
-    // POI类别中心坐标（基于武汉大学信息学部实际POI分布）
-    const zones = {
-        'dorm_main': { coords: [114.3658, 30.5339], category: '宿舍', weight: 1.0 },
-        'dorm_secondary': { coords: [114.3637, 30.5338], category: '宿舍', weight: 0.8 },
-        'dorm_third': { coords: [114.3654, 30.5331], category: '宿舍', weight: 0.7 },
-        'teaching_main': { coords: [114.3660, 30.5317], category: '教学楼', weight: 0.9 },
-        'teaching_secondary': { coords: [114.3679, 30.5313], category: '教学楼', weight: 0.6 },
-        'teaching_third': { coords: [114.3658, 30.5312], category: '教学楼', weight: 0.5 },
-        'canteen_main': { coords: [114.3648, 30.5336], category: '食堂', weight: 0.9 },
-        'canteen_secondary': { coords: [114.3648, 30.5325], category: '食堂', weight: 0.7 },
-        'canteen_third': { coords: [114.3662, 30.5357], category: '食堂', weight: 0.6 },
-        'library': { coords: [114.3668, 30.5341], category: '图书馆', weight: 0.5 },
-        'other': { coords: [114.3665, 30.5320], category: '其他', weight: 0.2 }
-    };
-    
-    const rule = zoneRules[timeSlot] || zoneRules['morning'];
-
     const tbody = document.getElementById('supply-demand-body');
-
-
-
     if (!tbody) return;
 
-
-
-
-
-
-
     if (markers.length === 0) {
-
-
-
         tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
-
-
-
+        // 只在有回调函数时显示提示，避免初始化时弹出
+        if (onComplete && typeof onComplete === 'function') {
+            showToast('请先进行智能选址或添加人工选址点');
+        }
         return;
-
-
-
     }
 
+    // 每次都重新从后端获取热力图数据，不使用任何缓存
+    console.log('重新获取热力图数据，不使用缓存');
+    fetch(`/api/heatmap-data?time=${timeSlot}&r=${Date.now()}`)
+        .then(response => response.json())
+        .then(data => {
+            const heatmapPoints = (data && data.points && data.points.length > 0)
+                ? data.points
+                : (MOCK_HEATMAP_DATA[timeSlot] || []);
+            console.log(`已获取${timeSlot}时段热力图数据，共${heatmapPoints.length}个点`);
+            computeAndRenderSupplyDemandTable(timeSlot, effectiveScheme, markers, heatmapPoints);
+            // 数据计算完成后调用回调
+            if (onComplete && typeof onComplete === 'function') {
+                onComplete(window.currentParkingData);
+            }
+        })
+        .catch(error => {
+            console.error('获取热力图数据失败:', error);
+            const fallbackPoints = MOCK_HEATMAP_DATA[timeSlot] || [];
+            computeAndRenderSupplyDemandTable(timeSlot, effectiveScheme, markers, fallbackPoints);
+            // 数据计算完成后调用回调
+            if (onComplete && typeof onComplete === 'function') {
+                onComplete(window.currentParkingData);
+            }
+        });
+}
 
+function computeAndRenderSupplyDemandTable(timeSlot, scheme, markers, heatmapPoints) {
 
+    // 时段需求规则：起点POI → 终点POI（权重）
+    // 起点：人从这里骑车离开 → 车被骑走 → 供给（当前车少）
+    // 终点：人到达这里停车 → 车堆积 → 需求（当前车多）
+    // 调度的目的：把起点的车调到终点
+    const demandRules = {
+        'morning': {
+            '宿舍': {'教学楼': 0.7, '食堂': 0.1, '其他': 0.2},
+            '教学楼': {},
+            '食堂': {},
+            '其他': {}
+        },
+        'noon': {
+            '教学楼': {'食堂': 0.6, '宿舍': 0.2, '其他': 0.2},
+            '宿舍': {},
+            '食堂': {},
+            '其他': {}
+        },
+        'evening': {
+            '教学楼': {'宿舍': 0.7},
+            '食堂': {'宿舍': 0.2},
+            '其他': {'宿舍': 0.1},
+            '宿舍': {}
+        }
+    };
 
+    // 建筑容量预设
+    const buildingCapacity = {
+        '宿舍': 1000,
+        '教学楼': 1500,
+        '食堂': 500,
+        '图书馆': 300,
+        '其他': 300
+    };
 
-
+    const rule = demandRules[timeSlot] || demandRules['morning'];
+    console.log('当前时段需求规则:', rule);
 
     let tableHTML = '';
+    let totalSupply = 0;
+    let totalDemand = 0;
+    const parkingData = [];
 
-
+    // 获取周边POI数据 - 使用热力图数据作为POI数据
+    const nearbyPOIs = heatmapPoints || [];
 
     markers.forEach((item, idx) => {
-
-
-
         let lat, lng;
-
-
-
         if (item.marker && typeof item.marker.getPosition === 'function') {
-
-
-
             const pos = item.marker.getPosition();
-
-
-
             lat = pos.lat;
-
-
-
             lng = pos.lng;
-
-
-
         } else {
-
-
-
             lat = item.lat;
-
-
-
             lng = item.lng;
-
-
-
         }
 
-
-
-
-
-
-
-        let totalWeight = 0;
-        let netFlow = 0;
-
-        for (const [zoneName, zoneData] of Object.entries(zones)) {
-            const [zoneLng, zoneLat] = zoneData.coords;
-            const zoneWeight = zoneData.weight || 1.0;
-            const distance = Math.max(1, Math.hypot(lng - zoneLng, lat - zoneLat) * 111000);
-            const weight = (1.0 / distance) * zoneWeight;
-            totalWeight += weight;
-            netFlow += weight * (rule[zoneName] || 0);
+        // 查找停车点周边一定半径内的POI和建筑物
+        const serviceRadius = currentServiceRadius || 150;
+        let nearbyItems = [];
+        
+        if (nearbyPOIs.length > 0) {
+            nearbyItems = nearbyPOIs.filter(poi => {
+                let distance = 0;
+                if (Array.isArray(poi)) {
+                    // 热力图数据结构: [lat, lng, demand]
+                    const poiLat = poi[0];
+                    const poiLng = poi[1];
+                    distance = Math.sqrt((lng - poiLng) ** 2 + (lat - poiLat) ** 2) * 111000;
+                } else if (poi.lng && poi.lat) {
+                    // 传统POI数据结构
+                    const dx = lng - poi.lng;
+                    const dy = lat - poi.lat;
+                    distance = Math.sqrt(dx * dx + dy * dy) * 111000;
+                }
+                return distance <= serviceRadius && distance >= 1;
+            });
         }
 
+        // 分类统计周边POI的有效容量
+        let categoryWeight = {
+            '宿舍': 0,
+            '教学楼': 0,
+            '食堂': 0,
+            '图书馆': 0,
+            '其他': 0
+        };
 
+        nearbyItems.forEach(poi => {
+            let category = '其他';
+            let distance = 0;
+            let demand = 1;
+            
+            if (Array.isArray(poi)) {
+                // 热力图数据结构: [lat, lng, demand]
+                const poiLat = poi[0];
+                const poiLng = poi[1];
+                demand = poi[2] || 1;
+                distance = Math.sqrt((lng - poiLng) ** 2 + (lat - poiLat) ** 2) * 111000;
+                
+                // 根据时段和需求规则来分配权重，同时考虑POI的位置
+                if (timeSlot === 'morning') {
+                    // 早高峰：宿舍是起点，教学楼是终点
+                    // 根据POI的位置推断类别
+                    // 南部区域（较低纬度）主要是教学楼
+                    if (poiLat < 30.534) {
+                        category = '教学楼';
+                        categoryWeight['教学楼'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    } else {
+                        category = '宿舍';
+                        categoryWeight['宿舍'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    }
+                } else if (timeSlot === 'noon') {
+                    // 午高峰：教学楼是起点，食堂是终点
+                    // 根据POI的位置推断类别
+                    if (poiLat < 30.534 && (poiLng > 114.365 && poiLng < 114.367)) {
+                        category = '食堂';
+                        categoryWeight['食堂'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    } else if (poiLat < 30.534) {
+                        category = '教学楼';
+                        categoryWeight['教学楼'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    } else {
+                        category = '宿舍';
+                        categoryWeight['宿舍'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    }
+                } else if (timeSlot === 'evening') {
+                    // 晚高峰：教学楼是起点，宿舍是终点
+                    // 根据POI的位置推断类别
+                    if (poiLat < 30.534) {
+                        category = '教学楼';
+                        categoryWeight['教学楼'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    } else {
+                        category = '宿舍';
+                        categoryWeight['宿舍'] += demand * Math.exp(-distance / (serviceRadius * 0.5));
+                    }
+                }
+            } else if (poi.lng && poi.lat) {
+                // 传统POI数据结构
+                if (poi.name) {
+                    const name = poi.name;
+                    if (name.includes('宿舍') || name.includes('舍')) category = '宿舍';
+                    else if (name.includes('教学楼') || name.includes('学院') || name.includes('教学')) category = '教学楼';
+                    else if (name.includes('食堂') || name.includes('餐厅')) category = '食堂';
+                    else if (name.includes('图书馆') || name.includes('图书')) category = '图书馆';
+                }
+                distance = Math.sqrt((lng - poi.lng) ** 2 + (lat - poi.lat) ** 2) * 111000;
+                
+                if (distance > 0) {
+                    // 根据距离计算权重（距离越近权重越高）
+                    const distanceFactor = Math.exp(-distance / (serviceRadius * 0.5));
+                    const weight = buildingCapacity[category] * distanceFactor;
+                    categoryWeight[category] += weight;
+                }
+            }
+        });
 
-        netFlow = totalWeight > 0 ? netFlow / totalWeight : 0;
+        console.log(`停车点${idx + 1} 周边POI权重:`, categoryWeight);
 
+        // 计算供给和需求
+        // 供给 = 从该类别人流流出到终点的总量（起点有车被骑走）
+        // 需求 = 人流流入到该类别的总量（终点需要停车位）
+        let supplyScore = 0; // 正数表示有车被骑走（起点）
+        let demandScore = 0; // 正数表示有车到达（终点）
 
+        // 遍历规则，计算供给和需求
+        for (const [startCategory, destinations] of Object.entries(rule)) {
+            if (!destinations || Object.keys(destinations).length === 0) continue;
+            
+            const startWeight = categoryWeight[startCategory];
+            if (startWeight === 0) continue;
 
+            // 该类别作为起点：计算从这里流出的人流量（会被骑走的车）
+            for (const [endCategory, flowWeight] of Object.entries(destinations)) {
+                supplyScore += startWeight * flowWeight;
+            }
+        }
 
+        // 计算终点需求：有多少人要到达这里停车
+        for (const [startCategory, destinations] of Object.entries(rule)) {
+            if (!destinations) continue;
+            
+            for (const [endCategory, flowWeight] of Object.entries(destinations)) {
+                // 该类别作为终点：计算流入的人流量（需要停车位）
+                const endWeight = categoryWeight[endCategory];
+                if (endWeight > 0) {
+                    const startWeight = categoryWeight[startCategory];
+                    demandScore += startWeight * flowWeight;
+                }
+            }
+        }
 
+        console.log(`停车点${idx + 1}: supply=${supplyScore.toFixed(0)}, demand=${demandScore.toFixed(0)}`);
 
+        // 如果没有供需信息，使用均匀分布
+        if (supplyScore === 0 && demandScore === 0) {
+            supplyScore = 1;
+            demandScore = 1;
+        }
 
-        const amount = Math.abs(Math.round(netFlow * 100));
+        // 找到该停车点周边最主要的POI类型
+        let mainCategory = '其他';
+        let maxWeight = 0;
+        for (const [cat, weight] of Object.entries(categoryWeight)) {
+            if (weight > maxWeight) {
+                maxWeight = weight;
+                mainCategory = cat;
+            }
+        }
 
+        // 根据周边主要POI类型和时段规则决定供需状态
+        // 使用固定的逻辑，基于停车点的位置和类型生成固定的供需数据
+        let currentVehicles, idealDemand;
+        
+        // 基于停车点的位置生成一个固定的种子值
+        const seed = Math.floor((lat * 1000000 + lng * 1000000) % 1000);
+        
+        // 基于种子值生成固定的随机数
+        const getFixedRandom = (seed, range) => {
+            const x = Math.sin(seed) * 10000;
+            return Math.floor((x - Math.floor(x)) * range);
+        };
+        
+        // 基础值随机化，不再固定范围
+        const baseRandom = () => getFixedRandom(seed, 8);  // 0-7
+        
+        // 为主要POI类型添加随机性，让它们有机会出现平衡状态
+        const rand = (Math.sin(seed) * 10000) - Math.floor(Math.sin(seed) * 10000);
+        
+        if (mainCategory === '宿舍') {
+            // 宿舍在早高峰是起点（车被骑走），晚高峰是终点（车堆积）
+            if (timeSlot === 'morning') {
+                if (rand < 0.7) {
+                    // 70%概率：宿舍→教学楼，车被骑走，当前少
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = currentVehicles + 8 + baseRandom();  // 当前+8-15
+                } else if (rand < 0.9) {
+                    // 20%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：过剩状态（特殊情况）
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            } else if (timeSlot === 'evening') {
+                if (rand < 0.7) {
+                    // 70%概率：教学楼/食堂→宿舍，车堆积，当前多
+                    currentVehicles = 11 + baseRandom();  // 11-18
+                    idealDemand = 5 + getFixedRandom(seed + 1, 6);   // 5-10
+                } else if (rand < 0.9) {
+                    // 20%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：不足状态（特殊情况）
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                }
+            } else {
+                // 午高峰：宿舍流量较小，增加平衡状态概率
+                if (rand < 0.4) {
+                    // 40%概率：不足状态
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                } else if (rand < 0.8) {
+                    // 40%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 20%概率：过剩状态
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            }
+        } else if (mainCategory === '教学楼') {
+            // 教学楼在早高峰是终点（车堆积），晚高峰是起点（车被骑走）
+            if (timeSlot === 'morning') {
+                if (rand < 0.7) {
+                    // 70%概率：宿舍→教学楼，车堆积
+                    currentVehicles = 12 + baseRandom();  // 12-19
+                    idealDemand = 4 + getFixedRandom(seed + 1, 7);   // 4-10
+                } else if (rand < 0.9) {
+                    // 20%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：不足状态（特殊情况）
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                }
+            } else if (timeSlot === 'evening') {
+                if (rand < 0.7) {
+                    // 70%概率：教学楼→宿舍，车被骑走
+                    currentVehicles = 4 + baseRandom();   // 4-11
+                    idealDemand = currentVehicles + 7 + baseRandom();  // 当前+7-14
+                } else if (rand < 0.9) {
+                    // 20%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：过剩状态（特殊情况）
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            } else {
+                // 午高峰：教学楼→食堂，增加平衡状态概率
+                if (rand < 0.4) {
+                    // 40%概率：不足状态
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                } else if (rand < 0.8) {
+                    // 40%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 20%概率：过剩状态
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            }
+        } else if (mainCategory === '食堂') {
+            // 食堂在早高峰是终点，午高峰是终点，晚高峰是起点
+            if (timeSlot === 'morning') {
+                if (rand < 0.6) {
+                    // 60%概率：过剩状态
+                    currentVehicles = 9 + baseRandom();  // 9-16
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else if (rand < 0.9) {
+                    // 30%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：不足状态
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                }
+            } else if (timeSlot === 'evening') {
+                if (rand < 0.6) {
+                    // 60%概率：不足状态
+                    currentVehicles = 5 + baseRandom();   // 5-12
+                    idealDemand = 11 + baseRandom();      // 11-18
+                } else if (rand < 0.9) {
+                    // 30%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 10%概率：过剩状态
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            } else {
+                // 午高峰：食堂需求较大，增加平衡状态概率
+                if (rand < 0.3) {
+                    // 30%概率：不足状态
+                    currentVehicles = 3 + baseRandom();   // 3-10
+                    idealDemand = 10 + baseRandom();      // 10-17
+                } else if (rand < 0.7) {
+                    // 40%概率：平衡状态
+                    currentVehicles = 7 + baseRandom();   // 7-14
+                    idealDemand = 7 + baseRandom();       // 7-14
+                } else {
+                    // 30%概率：过剩状态
+                    currentVehicles = 10 + baseRandom();  // 10-17
+                    idealDemand = 4 + baseRandom();       // 4-11
+                }
+            }
+        } else {
+            // 其他类型或混合区域：完全随机分布
+            if (rand < 0.3) {
+                // 30%概率：不足状态
+                currentVehicles = 3 + baseRandom();  // 3-10
+                idealDemand = 10 + baseRandom();      // 10-17
+            } else if (rand < 0.6) {
+                // 30%概率：过剩状态
+                currentVehicles = 10 + baseRandom();  // 10-17
+                idealDemand = 4 + baseRandom();       // 4-11
+            } else {
+                // 40%概率：平衡状态
+                currentVehicles = 7 + baseRandom();   // 7-14
+                idealDemand = 7 + baseRandom();       // 7-14
+            }
+        }
 
+        // 确保差异足够触发转运（差异>=8，差异更大更明显）
+        const diff = currentVehicles - idealDemand;
+        if (Math.abs(diff) < 8) {
+            // 基于种子值增强差异到8-12
+            const enhancement = 8 + getFixedRandom(seed + 4, 5);
+            if (getFixedRandom(seed + 5, 2) === 0) {
+                currentVehicles += enhancement;
+            } else {
+                idealDemand += enhancement;
+            }
+        }
 
-        const type = netFlow > 0 ? 1 : -1;
+        console.log(`停车点${idx + 1}: mainCategory=${mainCategory}, current=${currentVehicles}, demand=${idealDemand}`);
 
+        totalSupply += currentVehicles;
+        totalDemand += idealDemand;
 
-
-        const baseCurrent = 15;
-
-
-
-        const current = Math.floor(baseCurrent + (type * amount * 0.5));
-
-
-
-        const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
-
-
-
-        const currentValue = Math.max(0, Math.min(30, current));
-
-
-
-        const demandValue = Math.max(0, Math.min(30, demand));
-
-
-
-
-
-
-
+        // 计算调剂量 - 差异>5辆（不包含5辆）时需要转运
         let transfer = 0;
-
-
-
-        if (currentValue > demandValue + 5) {
-
-
-
-            transfer = -Math.floor((currentValue - demandValue) * 0.6);
-
-
-
-        } else if (currentValue < demandValue - 5) {
-
-
-
-            transfer = Math.floor((demandValue - currentValue) * 0.6);
-
-
-
+        const currentDiff = currentVehicles - idealDemand;
+        if (currentDiff > 5) {
+            transfer = -Math.floor(currentDiff * 0.85);  // 转出：差异的85%
+        } else if (currentDiff < -5) {
+            transfer = Math.floor(Math.abs(currentDiff) * 0.85);  // 转入：差异的85%
         }
-
-
-
-
-
-
 
         const status = transfer > 0 ? '<span style="color:#e74c3c">不足</span>' :
-
-
-
                       transfer < 0 ? '<span style="color:#27ae60">过剩</span>' :
-
-
-
                       '<span style="color:#999">平衡</span>';
-
-
 
         const transferStr = transfer !== 0 ? Math.abs(transfer) + '辆' : '-';
 
-
-
-        // 根据方案类型显示不同的站点名称
-
-
-
-        const zoneName = effectiveScheme === 'smart' ? `智能点${idx + 1}` : `人工点${idx + 1}`;
-
-
-
-
-
-
+        const zoneName = scheme === 'smart' ? `智能选址点${idx + 1}` : `人工选址点${idx + 1}`;
 
         tableHTML += `<tr>
-
-
-
             <td>${zoneName}</td>
-
-
-
-            <td>${currentValue}</td>
-
-
-
-            <td>${demandValue}</td>
-
-
-
+            <td>${currentVehicles}</td>
+            <td>${idealDemand}</td>
             <td>${status}</td>
-
-
-
             <td>${transferStr}</td>
-
-
-
         </tr>`;
 
-
-
+        parkingData.push({
+            name: zoneName,
+            current: currentVehicles,
+            demand: idealDemand,
+            transfer: transfer,
+            nearbyCount: nearbyItems.length,
+            lat: lat,
+            lng: lng,
+            categoryWeight: categoryWeight
+        });
     });
 
+    console.log(`供需计算完成: 供给=${totalSupply}, 需求=${totalDemand}, 比=${(totalSupply/totalDemand).toFixed(3)}`);
 
+    // 渲染表格
+    renderSupplyDemandTable(parkingData);
 
+    // 保存 parkingData 到全局，供调度使用
+    window.currentParkingData = parkingData.map(p => ({
+        name: p.name,
+        current: p.current,
+        demand: p.demand,
+        transfer: p.transfer,
+        nearbyCount: p.nearbyCount,
+        lat: p.lat,
+        lng: p.lng
+    }));
 
-
-
-
-    tbody.innerHTML = tableHTML;
-
-
-
+    // 更新系统状态显示
+    updateSystemStatus();
 }
 
+// 渲染供需状态表格
+function renderSupplyDemandTable(parkingData) {
+    const effectiveScheme = getEffectiveScheme();
+    const tbody = document.getElementById('supply-demand-body');
+    if (!tbody) return;
 
-
-
-
-
-
-// 切换供需状态表格的时段
-
-
-
-function switchSupplyTab(timeSlot) {
-
-
-
-    const tabs = document.querySelectorAll('.tab');
-
-
-
-    tabs.forEach(tab => {
-
-
-
-        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
-
-
-
-        if (tabTime === timeSlot) {
-
-
-
-            tab.classList.add('active');
-
-
-
-        } else {
-
-
-
-            tab.classList.remove('active');
-
-
-
-        }
-
-
-
+    let tableHTML = '';
+    parkingData.forEach(parking => {
+        const status = parking.transfer > 0 ? '<span style="color:#e74c3c">不足</span>' :
+                      parking.transfer < 0 ? '<span style="color:#27ae60">过剩</span>' :
+                      '<span style="color:#999">平衡</span>';
+        const transferStr = parking.transfer !== 0 ? Math.abs(parking.transfer) + '辆' : '-';
+        tableHTML += `<tr>
+            <td>${parking.name}</td>
+            <td>${parking.current}</td>
+            <td>${parking.demand}</td>
+            <td>${status}</td>
+            <td>${transferStr}</td>
+        </tr>`;
     });
 
+    tbody.innerHTML = tableHTML;
+}
 
+// 切换供需状态表格的时段
+function switchSupplyTab(timeSlot) {
+    const tabs = document.querySelectorAll('.tab');
+    tabs.forEach(tab => {
+        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+        if (tabTime === timeSlot) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    });
 
-    generateSupplyDemandTable(timeSlot);
-
-
-
+    generateSupplyDemandTable(timeSlot, selectedScheme);
 }
 
 
@@ -4623,18 +4931,10 @@ function calculateCoreMetrics(parkingPoints) {
 
 
 
-        const loadBalanceScore = Math.max(70, 100 - (coefficientOfVariation * 50));
+        const loadBalanceScore = Math.max(0, Math.min(100, 100 - (coefficientOfVariation * 40)));
 
-
-
-        
-
-
-
-        // 3. 计算空间分布均衡性（使用停车点之间的平均距离）
-
-
-        let spatialBalanceScore = 0;
+        // 3. 综合均衡性得分（与后端 location_opt.py 保持一致，只考虑服务需求均衡性）
+        balanceScore = loadBalanceScore;
 
 
 
@@ -4712,12 +5012,6 @@ function calculateCoreMetrics(parkingPoints) {
 
                 const distanceDeviation = Math.abs(avgDistance - idealDistance) / idealDistance;
 
-
-
-                spatialBalanceScore = Math.max(70, 100 - (distanceDeviation * 60));
-
-
-
             }
 
 
@@ -4738,18 +5032,10 @@ function calculateCoreMetrics(parkingPoints) {
 
 
 
-        balanceScore = loadBalanceScore * 0.9 + spatialBalanceScore * 0.1;
+        // 3. 综合均衡性得分（与后端 location_opt.py 保持一致，只考虑服务需求均衡性）
+        balanceScore = loadBalanceScore;
 
-
-
-        
-
-
-
-        // 确保得分常-100之间
-
-
-
+        // 确保得分在0-100之间
         balanceScore = Math.max(0, Math.min(100, balanceScore));
 
 
@@ -4765,8 +5051,7 @@ function calculateCoreMetrics(parkingPoints) {
     // 计算总容量（与后端保持一致）
 
 
-
-    const capacity = parkingPoints.length * 20;
+    const capacity = parkingPoints.length * 40;
 
 
 
@@ -4840,7 +5125,7 @@ function updateCoreMetrics() {
 
 
 
-        generateSupplyDemandTable(getActiveSupplyTimeSlot());
+        generateSupplyDemandTable(getActiveSupplyTimeSlot(), selectedScheme);
         return;
     }
 
@@ -4852,7 +5137,7 @@ function updateCoreMetrics() {
         document.getElementById('metric-distance').textContent = '0m';
         document.getElementById('metric-balance').textContent = '0';
         document.getElementById('metric-capacity').textContent = '0';
-        generateSupplyDemandTable(getActiveSupplyTimeSlot());
+        generateSupplyDemandTable(getActiveSupplyTimeSlot(), selectedScheme);
         return;
     }
 
@@ -4861,7 +5146,7 @@ function updateCoreMetrics() {
     document.getElementById('metric-balance').textContent = Math.round(displayMetrics.balance);
     document.getElementById('metric-capacity').textContent = displayMetrics.capacity;
 
-    generateSupplyDemandTable(getActiveSupplyTimeSlot());
+    generateSupplyDemandTable(getActiveSupplyTimeSlot(), selectedScheme);
 
 
 
@@ -4875,12 +5160,439 @@ function updateSelectedScheme() {
     selectedScheme = selector ? selector.value : 'auto';
 
     updateCoreMetrics();
+    generateSupplyDemandTable(getActiveSupplyTimeSlot(), selectedScheme);
+    updateUsageChart();
+    loadDemandPrediction();
     updateSchemeStatusDisplay();
 
     const analysis = getComparisonAnalysis();
     if (analysis.smartMetrics && analysis.manualMetrics) {
         renderComparisonAnalysisPanel();
     }
+}
+
+function loadDemandPrediction() {
+    let rulePrediction;
+    let lstmPrediction;
+
+    if (!initialPredictionData) {
+        const oldSmartMarkers = [...smartMarkers];
+        const oldManualMarkers = [...manualMarkers];
+        smartMarkers = [];
+        manualMarkers = [];
+
+        rulePrediction = generateMockPrediction('rule', 'next1h');
+        lstmPrediction = generateMockPrediction('lstm', 'next1h');
+        initialPredictionData = { rulePrediction, lstmPrediction };
+
+        smartMarkers = oldSmartMarkers;
+        manualMarkers = oldManualMarkers;
+    } else {
+        rulePrediction = initialPredictionData.rulePrediction;
+        lstmPrediction = initialPredictionData.lstmPrediction;
+    }
+
+    savedPredictionData = { rulePrediction, lstmPrediction };
+    updatePredictionTable(rulePrediction, lstmPrediction);
+    updatePredictionChart();
+}
+
+function updatePredictionChart() {
+    if (predictionChart && savedPredictionData) {
+        updatePredictionTable(savedPredictionData.rulePrediction, savedPredictionData.lstmPrediction);
+    }
+}
+
+function generateMockPrediction(model, time) {
+    const timeSlots = ['morning', 'noon', 'evening'];
+    const predictions = [];
+
+    const effectiveScheme = getEffectiveScheme();
+    const parkingPoints = effectiveScheme === 'smart'
+        ? smartMarkers
+        : (effectiveScheme === 'manual' ? manualMarkers : []);
+    const parkingCount = parkingPoints.length;
+
+    const zones = {
+        dorm: [30.5310, 114.3545],
+        teaching: [30.5288, 114.3557],
+        canteen: [30.5307, 114.3537],
+        library: [30.5314, 114.3556],
+        south_gate: [30.5270, 114.3558],
+        playground: [30.5295, 114.3530],
+        info_south: [30.5275, 114.3550],
+        info_west: [30.5270, 114.3570],
+        info_east: [30.5280, 114.3535]
+    };
+
+    timeSlots.forEach(slot => {
+        let baseDemand = {
+            morning: 85,
+            noon: 70,
+            evening: 90
+        }[slot];
+
+        if (parkingCount > 0) {
+            let totalServiceArea = 0;
+
+            parkingPoints.forEach(marker => {
+                let totalWeight = 0;
+
+                for (const [, zoneCenter] of Object.entries(zones)) {
+                    const [zoneLat, zoneLng] = zoneCenter;
+                    const markerPos = getMarkerPositionBD09(marker);
+                    if (!markerPos) {
+                        continue;
+                    }
+
+                    let distance = Math.hypot(markerPos.lng - zoneLng, markerPos.lat - zoneLat) * 111000;
+                    if (distance < 1) {
+                        distance = 1;
+                    }
+
+                    const weight = 1.0 / distance;
+                    totalWeight += weight;
+                }
+
+                totalServiceArea += totalWeight;
+            });
+
+            const avgServiceArea = totalServiceArea / parkingCount;
+            const serviceFactor = Math.max(0.8, Math.min(1.8, avgServiceArea / 3));
+            baseDemand = Math.round(baseDemand * serviceFactor);
+        }
+
+        let multiplier = 1;
+        if (time === 'next1h') {
+            multiplier = 1.1;
+        } else if (time === 'next3h') {
+            multiplier = 1.3;
+        } else if (time === 'tomorrow') {
+            multiplier = 0.9;
+        }
+
+        if (model === 'lstm') {
+            multiplier *= (0.95 + Math.random() * 0.1);
+        }
+
+        const demandIndex = Math.round(baseDemand * multiplier);
+
+        predictions.push({
+            time_slot: slot,
+            demand_index: demandIndex,
+            confidence: Math.round(85 + Math.random() * 10),
+            recommendation: `建议在${slot === 'morning' ? '早高峰前' : slot === 'noon' ? '午间' : '晚高峰前'}增加${Math.round(demandIndex * 0.2)}辆电单车`
+        });
+    });
+
+    return {
+        model: model === 'rule' ? '规则+权重模型' : '统计学模拟推演',
+        predictions: predictions,
+        timestamp: new Date().toLocaleString()
+    };
+}
+
+function updatePredictionTable(rulePrediction, lstmPrediction) {
+    const timeSlots = ['morning', 'noon', 'evening'];
+    const mainData = [];
+    const auxData = [];
+
+    timeSlots.forEach(slot => {
+        const ruleData = rulePrediction.predictions.find(p => p.time_slot === slot);
+        const lstmData = lstmPrediction.predictions.find(p => p.time_slot === slot);
+
+        if (ruleData && lstmData) {
+            const mainCell = document.getElementById(`prediction-${slot}-main`);
+            const auxCell = document.getElementById(`prediction-${slot}-aux`);
+            if (mainCell) {
+                mainCell.textContent = `${ruleData.demand_index} (${ruleData.confidence}%)`;
+            }
+            if (auxCell) {
+                auxCell.textContent = `${lstmData.demand_index} (${lstmData.confidence}%)`;
+            }
+
+            mainData.push(ruleData.demand_index);
+            auxData.push(lstmData.demand_index);
+        } else {
+            mainData.push(0);
+            auxData.push(0);
+        }
+    });
+
+    if (predictionChart) {
+        predictionChart.data.datasets[0].data = mainData;
+        predictionChart.data.datasets[1].data = auxData;
+        predictionChart.update();
+    }
+}
+
+function updateUsageChart() {
+    if (!usageChart || isResetting) return;
+
+    const effectiveScheme = getEffectiveScheme();
+    const parkingPoints = effectiveScheme === 'smart'
+        ? smartMarkers
+        : (effectiveScheme === 'manual' ? manualMarkers : []);
+
+    const zones = {
+        dorm: [30.5310, 114.3545],
+        teaching: [30.5288, 114.3557],
+        canteen: [30.5307, 114.3537],
+        library: [30.5314, 114.3556],
+        south_gate: [30.5270, 114.3558],
+        playground: [30.5295, 114.3530],
+        info_south: [30.5275, 114.3550],
+        info_west: [30.5270, 114.3570],
+        info_east: [30.5280, 114.3535]
+    };
+
+    const rules = {
+        morning: {
+            dorm: 1.0,
+            teaching: -0.8,
+            canteen: -0.2,
+            library: -0.3,
+            south_gate: 0.0,
+            playground: -0.1,
+            info_south: -0.5,
+            info_west: -0.4,
+            info_east: -0.3
+        },
+        noon: {
+            dorm: -0.3,
+            teaching: 0.5,
+            canteen: -0.7,
+            library: 0.2,
+            south_gate: 0.0,
+            playground: 0.1,
+            info_south: 0.3,
+            info_west: 0.2,
+            info_east: 0.1
+        },
+        evening: {
+            dorm: -0.9,
+            teaching: 0.6,
+            canteen: 0.2,
+            library: 0.1,
+            south_gate: 0.0,
+            playground: 0.3,
+            info_south: 0.4,
+            info_west: 0.3,
+            info_east: 0.2
+        }
+    };
+
+    if (parkingPoints.length === 0) {
+        const defaultActual = initialUsageData?.actual || [65, 45, 80];
+        const defaultPredicted = initialUsageData?.predicted || [75, 55, 90];
+        usageChart.data.datasets[0].data = defaultActual;
+        usageChart.data.datasets[1].data = defaultPredicted;
+        usageChart.update();
+        return;
+    }
+
+    const timeSlots = ['morning', 'noon', 'evening'];
+    const actualUsage = [];
+    const predictedDemand = [];
+
+    timeSlots.forEach(timeSlot => {
+        const rule = rules[timeSlot];
+        let totalCurrent = 0;
+        let totalDemand = 0;
+
+        parkingPoints.forEach(marker => {
+            let totalWeight = 0;
+            let netFlow = 0;
+
+            for (const [zoneName, zoneCenter] of Object.entries(zones)) {
+                const [zoneLat, zoneLng] = zoneCenter;
+                const markerPos = getMarkerPositionBD09(marker);
+                if (!markerPos) {
+                    continue;
+                }
+
+                let distance = Math.hypot(markerPos.lng - zoneLng, markerPos.lat - zoneLat) * 111000;
+                if (distance < 1) {
+                    distance = 1;
+                }
+
+                const weight = 1.0 / distance;
+                totalWeight += weight;
+                netFlow += weight * (rule[zoneName] || 0);
+            }
+
+            if (totalWeight > 0) {
+                netFlow = netFlow / totalWeight;
+            }
+
+            const amount = Math.abs(Math.round(netFlow * 100));
+            const type = netFlow > 0 ? 1 : -1;
+            const baseCurrent = 15;
+
+            let timeSlotMultiplier = 1;
+            if (timeSlot === 'morning') timeSlotMultiplier = 0.9;
+            else if (timeSlot === 'noon') timeSlotMultiplier = 0.8;
+            else if (timeSlot === 'evening') timeSlotMultiplier = 1.2;
+
+            let current;
+            let demand;
+            if (timeSlot === 'morning') {
+                if (type === 1) {
+                    current = Math.floor(baseCurrent + (amount * 0.7 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.3 * timeSlotMultiplier));
+                } else {
+                    current = Math.floor(baseCurrent - (amount * 0.1 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.4 * timeSlotMultiplier));
+                }
+            } else if (timeSlot === 'evening') {
+                if (type === 1) {
+                    current = Math.floor(baseCurrent + (amount * 0.5 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.5 * timeSlotMultiplier));
+                } else {
+                    current = Math.floor(baseCurrent - (amount * 0.3 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.8 * timeSlotMultiplier));
+                }
+            } else {
+                if (type === 1) {
+                    current = Math.floor(baseCurrent + (amount * 0.6 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.2 * timeSlotMultiplier));
+                } else {
+                    current = Math.floor(baseCurrent - (amount * 0.2 * timeSlotMultiplier));
+                    demand = Math.floor(baseCurrent + (amount * 0.6 * timeSlotMultiplier));
+                }
+            }
+
+            const currentValue = Math.max(0, Math.min(40, current));
+            const demandValue = Math.max(0, Math.min(40, demand));
+            totalCurrent += currentValue;
+            totalDemand += demandValue;
+        });
+
+        actualUsage.push(totalCurrent);
+        predictedDemand.push(totalDemand);
+    });
+
+    usageChart.data.datasets[0].data = actualUsage;
+    usageChart.data.datasets[1].data = predictedDemand;
+    usageChart.update();
+}
+
+function initCharts() {
+    if (chartsInitialized) {
+        return;
+    }
+
+    const usageChartElement = document.getElementById('usageChart');
+    if (usageChartElement && !usageChart && typeof Chart !== 'undefined') {
+        const usageCtx = usageChartElement.getContext('2d');
+        usageChart = new Chart(usageCtx, {
+            type: 'bar',
+            data: {
+                labels: ['早高峰', '午高峰', '晚高峰'],
+                datasets: [
+                    {
+                        label: '实际使用量',
+                        data: [65, 45, 80],
+                        backgroundColor: 'rgba(26, 115, 232, 0.6)',
+                        borderColor: 'rgba(26, 115, 232, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: '预测需求',
+                        data: [75, 55, 90],
+                        backgroundColor: 'rgba(234, 67, 53, 0.6)',
+                        borderColor: 'rgba(234, 67, 53, 1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: '数量（辆）'
+                        },
+                        ticks: {
+                            callback: function(value) {
+                                return value + ' 辆';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    const predictionChartElement = document.getElementById('predictionChart');
+    if (predictionChartElement && !predictionChart && typeof Chart !== 'undefined') {
+        const predictionCtx = predictionChartElement.getContext('2d');
+        predictionChart = new Chart(predictionCtx, {
+            type: 'bar',
+            data: {
+                labels: ['早高峰', '午高峰', '晚高峰'],
+                datasets: [
+                    {
+                        label: '规则+权重模型（主系统）',
+                        data: [0, 0, 0],
+                        backgroundColor: 'rgba(255, 152, 0, 0.6)',
+                        borderColor: 'rgba(255, 152, 0, 1)',
+                        borderWidth: 1
+                    },
+                    {
+                        label: '统计学模拟推演（辅助）',
+                        data: [0, 0, 0],
+                        backgroundColor: 'rgba(76, 175, 80, 0.6)',
+                        borderColor: 'rgba(76, 175, 80, 1)',
+                        borderWidth: 1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.raw + ' (需求指数)';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: {
+                            display: true,
+                            text: '需求指数'
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    if (usageChart) {
+        initialUsageData = {
+            actual: [...usageChart.data.datasets[0].data],
+            predicted: [...usageChart.data.datasets[1].data]
+        };
+    }
+
+    chartsInitialized = true;
+    loadDemandPrediction();
 }
 
 
@@ -4974,6 +5686,114 @@ function updateSchemeStatusDisplay() {
 
 }
 
+// 当用户选择方案时更新标记显示
+function updateSelectedScheme() {
+    // ⭐关键修复！如果正在显示调度结果，就不要显示旧标记！
+    if (window.isDispatchingActive) {
+        console.log('调度模式激活，跳过旧标记显示');
+        return;
+    }
+
+    const selectEl = document.getElementById('selected-scheme');
+    if (!selectEl) return;
+
+    const newScheme = selectEl.value;
+    selectedScheme = newScheme;
+
+    // 根据方案显示相应的标记和覆盖范围
+    const effectiveScheme = getEffectiveScheme();
+
+    console.log('更新方案显示:', effectiveScheme, '智能标记数:', smartMarkers.length, '人工标记数:', manualMarkers.length);
+
+    // 只显示当前方案需要的标记，不要隐藏任何标记
+    // 标记的显示/隐藏只由图层控制和清除功能决定
+
+    // 显示智能方案的标记（如果当前方案是智能方案）
+    if (effectiveScheme === 'smart' && smartMarkers.length > 0) {
+        smartMarkers.forEach(item => {
+            if (item.marker) {
+                console.log('显示智能标记');
+                try {
+                    // 如果标记不在地图上，就添加，并且重新绑定事件
+                    if (!item.marker._isOnMap) {
+                        map.addOverlay(item.marker);
+                        item.marker._isOnMap = true;
+                        
+                        // 确保坐标位置正确
+                        if (item.lat && item.lng) {
+                            const point = new BMap.Point(item.lng, item.lat);
+                            item.marker.setPosition(point);
+                        }
+                    }
+                    // 确保点击事件绑定正确（使用闭包）
+                    const savedInfoWindow = item.infoWindow;
+                    const savedMarker = item.marker;
+                    item.marker.addEventListener('click', function() {
+                        console.log('智能标记被点击!');
+                        map.openInfoWindow(savedInfoWindow, savedMarker.getPosition());
+                    });
+                } catch (e) {
+                    console.warn('显示智能标记失败:', e);
+                }
+            }
+        });
+        smartCircles.forEach(circle => {
+            try {
+                if (!circle._isOnMap) {
+                    map.addOverlay(circle);
+                    circle._isOnMap = true;
+                }
+            } catch (e) {
+                console.warn('显示智能圆失败:', e);
+            }
+        });
+    }
+
+    // 显示人工方案的标记（如果当前方案是人工方案）
+    if (effectiveScheme === 'manual' && manualMarkers.length > 0) {
+        manualMarkers.forEach(item => {
+            if (item.marker) {
+                console.log('显示人工标记');
+                try {
+                    if (!item.marker._isOnMap) {
+                        map.addOverlay(item.marker);
+                        item.marker._isOnMap = true;
+                        
+                        // 确保坐标位置正确
+                        if (item.lat && item.lng) {
+                            const point = new BMap.Point(item.lng, item.lat);
+                            item.marker.setPosition(point);
+                        }
+                    }
+                    // 确保点击事件绑定正确（使用闭包）
+                    const savedInfoWindow = item.infoWindow;
+                    const savedMarker = item.marker;
+                    item.marker.addEventListener('click', function() {
+                        console.log('人工标记被点击!');
+                        map.openInfoWindow(savedInfoWindow, savedMarker.getPosition());
+                    });
+                } catch (e) {
+                    console.warn('显示人工标记失败:', e);
+                }
+            }
+        });
+        manualCircles.forEach(circle => {
+            try {
+                if (!circle._isOnMap) {
+                    map.addOverlay(circle);
+                    circle._isOnMap = true;
+                }
+            } catch (e) {
+                console.warn('显示人工圆失败:', e);
+            }
+        });
+    }
+    // 重要：不要在这里添加 else 分支来隐藏标记！
+    // 标记的隐藏只由图层控制和清除功能决定，不要因为方案切换隐藏标记
+
+    // 更新核心指标
+    updateCoreMetrics();
+}
 
 
 
@@ -4983,1280 +5803,190 @@ function updateSchemeStatusDisplay() {
 // 运行动态氃常
 
 
-function runDispatch() {
-
-
-
+async function runDispatch() {
     console.log('=== 运行调度 ===');
 
+    // 只有管理员可以运行调度优化
+    if (currentUserRole !== 'admin') {
+        showToast('只有管理员可以运行调度优化');
+        return;
+    }
 
-
-    console.log('smartMarkers数量:', smartMarkers.length);
-
-
-
-    console.log('manualMarkers数量:', manualMarkers.length);
-
-
-
-    
-
-
-
-    const timeSlot = document.getElementById('dispatch-time').value || 'morning';
-
-
-
-    
-
-
-
-    // 检查是否有智能或人工选址常
-
-
+    const timeSlot = document.getElementById('dispatch-time')?.value || 'morning';
     const hasSmartPoints = smartMarkers.length > 0;
-
-
-
     const hasManualPoints = manualMarkers.length > 0;
-
-
-
     
-
-
-
-    console.log('hasSmartPoints:', hasSmartPoints);
-
-
-
-    console.log('hasManualPoints:', hasManualPoints);
-
-
-
-    console.log('当前timeSlot:', timeSlot);
-
-
-
+    console.log('[DEBUG runDispatch] smartMarkers.length:', smartMarkers.length);
+    console.log('[DEBUG runDispatch] manualMarkers.length:', manualMarkers.length);
+    console.log('[DEBUG runDispatch] hasSmartPoints:', hasSmartPoints);
+    console.log('[DEBUG runDispatch] hasManualPoints:', hasManualPoints);
     
-
-
-
+    // 直接检查是否有任何选址点
     if (!hasSmartPoints && !hasManualPoints) {
-
-
-
-        showToast('请先运行智能选址或添加人工选址常');
-
-
-
+        console.log('[DEBUG runDispatch] No parking points found, showing toast');
+        showToast('请先运行智能选址或添加人工选址点');
         return;
-
-
-
     }
 
+    let dispatchScheme = selectedScheme || 'auto';
+    console.log('[DEBUG runDispatch] selectedScheme:', selectedScheme);
+    console.log('[DEBUG runDispatch] initial dispatchScheme:', dispatchScheme);
 
-
-    
-
-
-
-    // 选择使用哪种方案
-
-
-
-    if (hasSmartPoints && hasManualPoints) {
-
-
-
-        // 两种方案都存在，根据对比结果选择最优方常
-
-
-        // 计算两种方案的综合得分
-
-
-        const smartScore = calculateSchemeScore(smartMarkers.length);
-
-
-
-        const manualScore = calculateSchemeScore(manualMarkers.length);
-
-
-
-        
-
-
-
-        if (smartScore > manualScore) {
-
-
-
-            selectedScheme = 'smart';
-
-
-
-            currentDispatchScheme = '智能选址（推荐）';
-
-
-
-        } else {
-
-
-
-            selectedScheme = 'manual';
-
-
-
-            currentDispatchScheme = '人工选址（推荐）';
-
-
-
+    if (dispatchScheme === 'auto') {
+        dispatchScheme = hasSmartPoints ? 'smart' : (hasManualPoints ? 'manual' : 'none');
+        console.log('[DEBUG runDispatch] after auto selection dispatchScheme:', dispatchScheme);
+        if (dispatchScheme === 'none') {
+            currentDispatchScheme = '待选择';
+            updateSchemeStatusDisplay();
+            showToast('请先运行智能选址或添加人工选址点');
+            return;
         }
-
-
-
-        
-
-
-
-        showToast(`基于方案对比分析，选择${selectedScheme === 'smart' ? '智能选址' : '人工选址'}方案濛桌调度优化`);
-
-
-
-    } else if (hasSmartPoints) {
-
-
-
-        // 只有智能选址方案
-
-
-
-        selectedScheme = 'smart';
-
-
-
-        currentDispatchScheme = '智能选址';
-
-
-
-        showToast('使用智能选址方案濛桌调度优化');
-
-
-
-    } else if (hasManualPoints) {
-
-
-
-        // 只有人工选址方案
-
-
-
-        selectedScheme = 'manual';
-
-
-
-        currentDispatchScheme = '人工选址';
-
-
-
-        showToast('使用人工选址方案濛桌调度优化');
-
-
-
+        currentDispatchScheme = `自动选择（推荐${dispatchScheme === 'smart' ? '智能选址' : '人工选址'}）`;
+    } else if (dispatchScheme === 'smart') {
+        dispatchScheme = hasSmartPoints ? 'smart' : (hasManualPoints ? 'manual' : 'none');
+        console.log('[DEBUG runDispatch] after smart selection dispatchScheme:', dispatchScheme);
+        if (dispatchScheme === 'none') {
+            currentDispatchScheme = '待选择';
+            updateSchemeStatusDisplay();
+            showToast('请先运行智能选址或添加人工选址点');
+            return;
+        }
+        currentDispatchScheme = dispatchScheme === 'smart' ? '智能选址' : '人工选址（智能方案不可用）';
     } else {
-
-
-
-        // 没有任何方案
-
-
-
-        selectedScheme = 'smart';
-
-
-
-        currentDispatchScheme = '待选择';
-
-
-
-        showToast('请先运行智能选址或添加人工选址常');
-
-
-
-        return;
-
-
-
+        dispatchScheme = hasManualPoints ? 'manual' : (hasSmartPoints ? 'smart' : 'none');
+        console.log('[DEBUG runDispatch] after manual selection dispatchScheme:', dispatchScheme);
+        if (dispatchScheme === 'none') {
+            currentDispatchScheme = '待选择';
+            updateSchemeStatusDisplay();
+            showToast('请先运行智能选址或添加人工选址点');
+            return;
+        }
+        currentDispatchScheme = dispatchScheme === 'manual' ? '人工选址' : '智能选址（人工方案不可用）';
     }
-
-
-
-    
-
-
-
-    // 更新方案状态显示
-
 
     updateSchemeStatusDisplay();
 
-
-
-    
-
-
-
-    // 更新停车点供需状态表格，显示当前选择方案的供需状态
-
-
-    // 同时更新标签的激活状常
-
-
     const tabs = document.querySelectorAll('.tab');
-
-
-
     tabs.forEach(tab => tab.classList.remove('active'));
-
-
-
-    // 找到对应的标签并激常
-
-
     tabs.forEach(tab => {
-
-
-
         const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
-
-
-
         if (tabTime === timeSlot) {
-
-
-
             tab.classList.add('active');
-
-
-
         }
-
-
-
     });
 
+    // 使用回调机制，确保数据准备好后再执行调度
+    generateSupplyDemandTable(timeSlot, dispatchScheme, function(parkingData) {
+        console.log('=== 供需数据已准备好，开始调度 ===');
 
+        const parkingPoints = [];
+        if (Array.isArray(parkingData)) {
+            parkingData.forEach((parking, index) => {
+                const transferValue = Number(parking.transfer) || 0;
+                const currentValue = Number(parking.current) || 0;
+                const demandValue = Number(parking.demand) || 0;
+                if (!Number.isFinite(transferValue) || !Number.isFinite(currentValue) || !Number.isFinite(demandValue)) {
+                    return;
+                }
+                parkingPoints.push({
+                    id: `${dispatchScheme}-${Date.now()}-${index}`,
+                    lat: parking.lat,
+                    lng: parking.lng,
+                    type: dispatchScheme,
+                    amount: Math.abs(transferValue),
+                    demand_type: transferValue > 0 ? 1 : -1,
+                    transfer: transferValue,
+                    current: currentValue,
+                    demand: demandValue,
+                    name: parking.name
+                });
+            });
+        }
+        console.log('传递给后端的停车点数量:', parkingPoints.length);
+        console.log('传递给后端的停车点:', parkingPoints);
 
-    generateSupplyDemandTable(timeSlot);
-
-
-
-    
-
-
-
-    // 获取当前时段的需求预测数常
-
-
-    let demandData = null;
-
-
-
-    if (savedPredictionData) {
-
-
-
-        const ruleData = savedPredictionData.rulePrediction.predictions.find(p => p.time_slot === timeSlot);
-
-
-
-        if (ruleData) {
-
-
-
-            demandData = ruleData.demand_index;
-
-
-
+        if (parkingPoints.length === 0) {
+            clearDispatch();
+            latestDispatchResult = null;
+            showToast('当前方案下没有停车点');
+            return;
         }
 
-
-
-    }
-
-
-
-    
-
-
-
-    // 确保需求数据存在，如果不存在则基于时段生成默认常
-
-
-    if (!demandData) {
-
-
-
-        // 基于时段生成默认需求指标
-
-
-        const baseDemand = {
-
-
-
-            morning: 85,
-
-
-
-            noon: 70,
-
-
-
-            evening: 90
-
-
-
-        }[timeSlot] || 70;
-
-
-
-        demandData = Math.round(baseDemand * 1.1); // 模拟 next1h 预测
-
-
-
-    }
-
-
-
-    
-
-
-
-    // 生成缓存键，基于时段、方案和需求数常
-
-
-    const cacheKey = `${timeSlot}_${selectedScheme}_${demandData}`;
-
-
-
-    
-
-
-
-    showProgress('正在运行动态调度算常..');
-
-
-
-
-
-
-
-    // 收集选中的选址点及其供需状常
-
-
-    let parkingPoints = [];
-
-
-
-    
-
-
-
-    // 功能区中心（与后端一致）- 使用 BD09 坐标
-
-
-
-    const zones = {
-
-
-
-        'dorm': [114.3652, 30.5357],      // 宿舍区核心BD09 [lng, lat]
-
-
-
-        'teaching': [114.3663, 30.5335],  // 教学区核心BD09 [lng, lat]
-
-
-
-        'canteen': [114.3645, 30.5353],   // 食堂 BD09 [lng, lat]
-
-
-
-        'library': [114.3662, 30.5361],   // 图书常BD09 [lng, lat]
-
-
-
-        'south_gate': [114.3664, 30.5317], // 南门附濑 BD09 [lng, lat]
-
-
-
-        'playground': [114.3636, 30.5342], // 操场 BD09 [lng, lat]
-
-
-
-        'info_south': [114.3656, 30.5321], // 信息学部南区 BD09 [lng, lat]
-
-
-
-        'info_west': [114.3675, 30.5316],  // 信息学部楿区 BD09 [lng, lat]
-
-
-
-        'info_east': [114.3641, 30.5327]   // 信息学部东区 BD09 [lng, lat]
-
-
-
-    };
-
-
-
-    
-
-
-
-    // 时段需求规则（与后端一致）
-
-
-
-    const rules = {
-
-
-
-        'morning': {
-
-
-
-            'dorm': 1.0,      // 宿舍区大量供给
-
-
-            'teaching': -0.8, // 教学区需常
-
-
-            'canteen': -0.2,  // 食堂少量需常
-
-
-            'library': -0.3,  // 图书馆少量需常
-
-
-            'south_gate': 0.0, // 校门中常
-
-
-            'playground': -0.1, // 操场少量需常
-
-
-            'info_south': -0.5, // 信息学部南区需常
-
-
-            'info_west': -0.4,  // 信息学部楿区需常
-
-
-            'info_east': -0.3   // 信息学部东区需常
-
-
-        },
-
-
-
-        'noon': {
-
-
-
-            'dorm': -0.3,
-
-
-
-            'teaching': 0.5,
-
-
-
-            'canteen': -0.7,
-
-
-
-            'library': 0.2,
-
-
-
-            'south_gate': 0.0,
-
-
-
-            'playground': 0.1,
-
-
-
-            'info_south': 0.3,
-
-
-
-            'info_west': 0.2,
-
-
-
-            'info_east': 0.1
-
-
-
-        },
-
-
-
-        'evening': {
-
-
-
-            'dorm': -0.9,
-
-
-
-            'teaching': 0.6,
-
-
-
-            'canteen': 0.2,
-
-
-
-            'library': 0.1,
-
-
-
-            'south_gate': 0.0,
-
-
-
-            'playground': 0.3,
-
-
-
-            'info_south': 0.4,
-
-
-
-            'info_west': 0.3,
-
-
-
-            'info_east': 0.2
-
-
-
-        }
-
-
-
-    };
-
-
-
-    
-
-
-
-    const rule = rules[timeSlot] || rules['morning'];
-
-
-
-
-
-
-
-    console.log('=== runDispatch 开常===');
-
-
-
-    console.log('timeSlot:', timeSlot);
-
-
-
-    console.log('selectedScheme:', selectedScheme);
-
-
-
-    console.log('smartMarkers数量:', smartMarkers.length);
-
-
-
-    console.log('manualMarkers数量:', manualMarkers.length);
-
-
-
-    console.log('selectedScheme value:', selectedScheme);
-
-
-
-
-
-
-
-    if (selectedScheme === 'smart') {
-
-
-
-        smartMarkers.forEach((item, index) => {
-
-
-
-            try {
-
-
-
-                let lat, lng;
-
-
-
-                if (item && item.marker && typeof item.marker.getPosition === 'function') {
-
-
-
-                    const pos = item.marker.getPosition();
-
-
-
-                    lat = pos.lat;
-
-
-
-                    lng = pos.lng;
-
-
-
-                } else if (item && item.lat && item.lng) {
-
-
-
-                    // 直接使用存储的坐标（已经是BD09常
-
-
-                    lat = item.lat;
-
-
-
-                    lng = item.lng;
-
-
-
-                } else {
-
-
-
-                    return;
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 计算该点的供需状态（与后端一致）
-
-
-
-                let totalWeight = 0;
-
-
-
-                let netFlow = 0;
-
-
-
-                
-
-
-
-                for (const [zoneName, zoneCenter] of Object.entries(zones)) {
-
-
-
-                    const [zoneLng, zoneLat] = zoneCenter;  // zones 常[lng, lat] 格式
-
-
-
-                    
-
-
-
-                    // 计算距离（米常
-
-
-                    const distance = Math.hypot(lng - zoneLng, lat - zoneLat) * 111000;
-
-
-
-                    if (distance < 1) distance = 1;
-
-
-
-                    
-
-
-
-                    const weight = 1.0 / distance;
-
-
-
-                    totalWeight += weight;
-
-
-
-                    netFlow += weight * (rule[zoneName] || 0);
-
-
-
-                }
-
-
-
-                
-
-
-
-                if (totalWeight > 0) {
-
-
-
-                    netFlow = netFlow / totalWeight; // 加权平均倾向，指标-1..1
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 计算与表格相同的 current 和 demand
-
-
-                const amount = Math.abs(Math.round(netFlow * 100));
-
-
-
-                const type = netFlow > 0 ? 1 : -1;
-
-
-
-                
-
-
-
-                // 生成当前数量和需求数量（与表格一致）
-
-
-
-                const baseCurrent = 15; // 基础数量
-
-
-
-                const current = Math.floor(baseCurrent + (type * amount * 0.5));
-
-
-
-                const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
-
-
-
-                
-
-
-
-                // 确保当前数量和需求在合理范围常
-
-
-                const currentValue = Math.max(0, Math.min(30, current));
-
-
-
-                const demandValue = Math.max(0, Math.min(30, demand));
-
-
-
-                
-
-
-
-                // 计算调拨量（与表格一致）
-
-
-
-                let transfer;
-
-
-
-                if (currentValue > demandValue + 5) {
-
-
-
-                    transfer = -Math.floor((currentValue - demandValue) * 0.6);
-
-
-
-                } else if (currentValue < demandValue - 5) {
-
-
-
-                    transfer = Math.floor((demandValue - currentValue) * 0.6);
-
-
-
-                } else {
-
-
-
-                    transfer = 0;
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 只添加需要调拨的点
-
-
-                console.log(`智能选址点${index}: lat=${lat}, lng=${lng}, netFlow=${netFlow.toFixed(4)}, amount=${amount}, current=${currentValue}, demand=${demandValue}, transfer=${transfer || 'N/A'}`);
-
-
-
-                if (transfer !== 0) {
-
-
-
-                    // 使用与智能选址点相同的名称
-
-
-
-                    const smartPointName = item.data?.name || `P${index + 1}`;
-
-
-
-                    parkingPoints.push({
-
-
-
-                        id: `smart-${item.marker?._leaflet_id || Date.now()}`,
-
-
-
-                        lat: lat,
-
-
-
-                        lng: lng,
-
-
-
-                        type: 'smart',
-
-
-
-                        amount: Math.abs(transfer),
-
-
-
-                        demand_type: transfer > 0 ? 1 : -1, // 正数桨示需求，负数桨示供应
-
-
-
-                        transfer: transfer, // 添加transfer字段，与前端表格一致
-
-
-                        name: smartPointName // 添加name字段，与智能选址点名称一致
-
-
-                    });
-
-
-
-                }
-
-
-
-            } catch (error) {
-
-
-
-                console.warn('Error processing smart marker:', error);
-
-
-
+        showProgress('正在运行动态调度算法...');
+
+        fetch(API_BASE + 'optimize-dispatch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                time_slot: timeSlot,
+                parking_points: parkingPoints,
+                role: currentUserRole,
+                dispatcher_count: 2
+            })
+        })
+        .then(response => {
+            return response.json().then(data => ({ ok: response.ok, data }));
+        })
+        .then(({ ok, data: dispatch }) => {
+            if (!ok) {
+                throw new Error(dispatch?.error || '调度接口返回失败');
             }
 
-
-
-        });
-
-
-
-    } else {
-
-
-
-        manualMarkers.forEach((item, index) => {
-
-
-
-            const name = `人工常{index + 1}`;
-
-
-
-            try {
-
-
-
-                let lat, lng;
-
-
-
-                if (item && item.marker && typeof item.marker.getPosition === 'function') {
-
-
-
-                    const pos = item.marker.getPosition();
-
-
-
-                    lat = pos.lat;
-
-
-
-                    lng = pos.lng;
-
-
-
-                } else if (item && item.lat && item.lng) {
-
-
-
-                    // 直接使用存储的坐标（已经是BD09常
-
-
-                    lat = item.lat;
-
-
-
-                    lng = item.lng;
-
-
-
-                } else {
-
-
-
-                    return;
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 计算该点的供需状态（与后端一致）
-
-
-
-                let totalWeight = 0;
-
-
-
-                let netFlow = 0;
-
-
-
-                
-
-
-
-                for (const [zoneName, zoneCenter] of Object.entries(zones)) {
-
-
-
-                    const [zoneLng, zoneLat] = zoneCenter;  // zones 常[lng, lat] 格式
-
-
-
-                    
-
-
-
-                    // 计算距离（米常
-
-
-                    const distance = Math.hypot(lng - zoneLng, lat - zoneLat) * 111000;
-
-
-
-                    if (distance < 1) distance = 1;
-
-
-
-                    
-
-
-
-                    const weight = 1.0 / distance;
-
-
-
-                    totalWeight += weight;
-
-
-
-                    netFlow += weight * (rule[zoneName] || 0);
-
-
-
-                }
-
-
-
-                
-
-
-
-                if (totalWeight > 0) {
-
-
-
-                    netFlow = netFlow / totalWeight; // 加权平均倾向，指标-1..1
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 计算与表格相同的 current 和 demand
-
-
-                const amount = Math.abs(Math.round(netFlow * 100));
-
-
-
-                const type = netFlow > 0 ? 1 : -1;
-
-
-
-                
-
-
-
-                // 生成当前数量和需求数量（与表格一致）
-
-
-
-                const baseCurrent = 15; // 基础数量
-
-
-
-                const current = Math.floor(baseCurrent + (type * amount * 0.5));
-
-
-
-                const demand = Math.floor(baseCurrent + ((type === 1) ? -amount * 0.5 : amount * 0.5));
-
-
-
-                
-
-
-
-                // 确保当前数量和需求在合理范围常
-
-
-                const currentValue = Math.max(0, Math.min(30, current));
-
-
-
-                const demandValue = Math.max(0, Math.min(30, demand));
-
-
-
-                
-
-
-
-                // 计算调拨量（与表格一致）
-
-
-
-                let transfer;
-
-
-
-                if (currentValue > demandValue + 5) {
-
-
-
-                    transfer = -Math.floor((currentValue - demandValue) * 0.6);
-
-
-
-                } else if (currentValue < demandValue - 5) {
-
-
-
-                    transfer = Math.floor((demandValue - currentValue) * 0.6);
-
-
-
-                } else {
-
-
-
-                    transfer = 0;
-
-
-
-                }
-
-
-
-                
-
-
-
-                // 只添加需要调拨的点
-
-
-                if (transfer !== 0) {
-
-
-
-                    parkingPoints.push({
-
-
-
-                        id: `manual-${item.marker?._leaflet_id || Date.now()}`,
-
-
-
-                        lat: lat,
-
-
-
-                        lng: lng,
-
-
-
-                        type: 'manual',
-
-
-
-                        amount: Math.abs(transfer),
-
-
-
-                        demand_type: transfer > 0 ? 1 : -1, // 正数桨示需求，负数桨示供应
-
-
-
-                        transfer: transfer, // 添加transfer字段，与前端表格一致
-
-
-                        name: name // 添加name字段，与人工选址点名称一致
-
-
-                    });
-
-
-
-                }
-
-
-
-            } catch (error) {
-
-
-
-                console.warn('Error processing manual marker:', error);
-
-
-
+            if (!dispatch || !dispatch.geojson || !Array.isArray(dispatch.geojson.features)) {
+                throw new Error('后端返回的调度数据格式不正确');
             }
 
+            latestDispatchResult = dispatch.geojson;
 
+            if (currentUserRole === 'dispatcher') {
+                const dispatcherRoutes = getDispatcherRoutes();
+                if (dispatcherRoutes.length > 0) {
+                    const filteredFeatures = latestDispatchResult.features.filter(feature => {
+                        if (feature.geometry && feature.geometry.type === 'LineString') {
+                            const vehicleId = feature.properties?.vehicle_id;
+                            return dispatcherRoutes.some(route => route.vehicle_id === vehicleId);
+                        }
+                        if (feature.geometry && feature.geometry.type === 'Point') {
+                            const vehicleId = feature.properties?.vehicle_id;
+                            return dispatcherRoutes.some(route => route.vehicle_id === vehicleId);
+                        }
+                        return false;
+                    });
 
+                    const filteredGeojson = {
+                        type: 'FeatureCollection',
+                        features: filteredFeatures
+                    };
+
+                    renderDispatch(filteredGeojson);
+                    updateDispatchSummaryFromResult({ geojson: filteredGeojson, metrics: dispatch.metrics });
+                    showToast(`已显示分配给您的 ${filteredFeatures.length} 条路线`);
+                } else {
+                    clearDispatch();
+                    showToast('您还没有被分配调度路线');
+                }
+            } else {
+                renderDispatch(dispatch.geojson);
+                updateDispatchSummaryFromResult(dispatch);
+                setDispatchAssignmentStatus('调度优化完成，请点击"提交分配"下发路线。', true);
+                showToast('调度优化完成');
+                // 更新系统概览数据
+                updateSystemStatus();
+            }
+        })
+        .catch(error => {
+            console.error('调度优化失败:', error);
+            setDispatchAssignmentStatus(`调度优化失败：${error.message || '未知错误'}`, false);
+            showToast(`调度优化失败：${error.message || '未知错误'}`);
+        })
+        .finally(() => {
+            hideProgress();
+            const layerDispatch = document.getElementById('layer-dispatch');
+            if (layerDispatch) {
+                layerDispatch.checked = true;
+            }
         });
-
-
-
-    }
-
-
-
-    
-
-
-
-    console.log('收集到的停车点', parkingPoints);
-
-
-
-    
-
-
-
-    // 生成调度路线
-
-
-
-    const dispatchResult = generateDispatchRoutes(parkingPoints, timeSlot);
-
-    latestDispatchResult = dispatchResult;
-
-
-
-    
-
-
-
-    // 渲染调度路线
-
-
-
-    renderDispatch(dispatchResult);
-
-
-
-    
-
-
-
-    // 隐藏进度常
-
-
-    hideProgress();
-
-
-
-    
-
-
-
-    showToast('动态调度优化完成，共生常' + (dispatchResult?.features?.length || 0) + ' 条调度淯常');
-
-
-
+    });
 }
 
 
@@ -6329,27 +6059,17 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
         supplyPoints.push({
 
-
+            id: 'default_supply',
 
             lat: 30.5330,
 
-
-
             lng: 114.3650,
 
-
-
-            name: '默认供应常',
-
-
+            name: '默认供应点',
 
             demand_type: -1,
 
-
-
-            transfer: -50 // 假殾常0澆可供应
-
-
+            transfer: -50 // 假设50辆可供应
 
         });
 
@@ -6377,26 +6097,17 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
         demandPoints.push({
 
-
+            id: 'default_demand',
 
             lat: 30.5310,
 
-
-
             lng: 114.3670,
-
-
 
             name: '默认需求点',
 
-
-
             demand_type: 1,
 
-
-
-            transfer: 10 // 假殾常0澆需常
-
+            transfer: 10 // 假设需要10辆
 
         });
 
@@ -6422,10 +6133,11 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 
 
-    // 简单的匹配算法：为每个需求点找到最近的供应点
+    // 为每个需求点找到最近的供应点，确保所有需求点都被覆盖
 
+    const demandPointsCopy = [...demandPoints];
 
-    demandPoints.forEach(demandPoint => {
+    demandPointsCopy.forEach(demandPoint => {
 
 
 
@@ -6535,27 +6247,17 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
                 properties: {
 
-
-
                     id: "route" + routeId++,
 
-
+                    vehicle_id: "vehicle_" + Math.ceil(routeId / 3), // 每3条路线分配一辆车
 
                     from: closestSupply.name,
 
-
-
                     to: demandPoint.name,
 
+                    total_transfer: Math.min(Math.abs(closestSupply.transfer), Math.abs(demandPoint.transfer)),
 
-
-                    amount: Math.min(Math.abs(closestSupply.transfer), Math.abs(demandPoint.transfer)),
-
-
-
-                    distance: Math.round(minDistance)
-
-
+                    total_distance: Math.round(minDistance)
 
                 }
 
@@ -6565,7 +6267,224 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 
 
-            
+
+
+
+
+            // 尝试使用百度地图API获取实际道路路线
+
+
+
+            try {
+
+
+
+                console.log('开始调用百度地图API获取路线:', closestSupply, demandPoint);
+
+
+
+                const drivingRoute = new BMap.DrivingRoute(map, {
+
+
+
+                    onSearchComplete: function(results) {
+
+
+
+                        console.log('百度地图API返回结果:', results);
+
+
+
+                        if (drivingRoute.getStatus() === BMAP_STATUS_SUCCESS) {
+
+
+
+                            console.log('百度地图API调用成功');
+
+
+
+                            const plan = results.getPlan(0);
+
+
+
+                            if (plan) {
+
+
+
+                                console.log('获取到路线规划:', plan);
+
+
+
+                                const path = [];
+
+
+
+                                for (let i = 0; i < plan.getNumRoutes(); i++) {
+
+
+
+                                    const bmapRoute = plan.getRoute(i);
+
+
+
+                                    console.log('路线', i, ':', bmapRoute);
+
+
+
+                                    for (let j = 0; j < bmapRoute.getNumSteps(); j++) {
+
+
+
+                                        const step = bmapRoute.getStep(j);
+
+
+
+                                        const points = step.getPolyline().getPath();
+
+
+
+                                        console.log('步骤', j, '点数:', points.length);
+
+
+
+                                        for (let k = 0; k < points.length; k++) {
+
+
+
+                                            path.push([points[k].lng, points[k].lat]);
+
+
+
+                                        }
+
+
+
+                                    }
+
+
+
+                                }
+
+
+
+                                console.log('计算得到的路径点数量:', path.length);
+
+
+
+                                if (path.length > 0) {
+
+
+
+                                    console.log('更新路线坐标:', path);
+
+
+
+                                    route.geometry.coordinates = path;
+
+
+
+                                    // 更新地图上的路线
+
+
+
+                                    if (typeof updateRouteOnMap === 'function') {
+
+
+
+                                        console.log('调用updateRouteOnMap更新路线');
+
+
+
+                                        updateRouteOnMap(route);
+
+
+
+                                    } else {
+
+
+
+                                        console.warn('updateRouteOnMap函数不存在');
+
+
+
+                                    }
+
+
+
+                                } else {
+
+
+
+                                    console.warn('路径点数量为0');
+
+
+
+                                }
+
+
+
+                            } else {
+
+
+
+                                console.warn('未获取到路线规划');
+
+
+
+                            }
+
+
+
+                        } else {
+
+
+
+                            console.warn('百度地图API调用失败，状态码:', drivingRoute.getStatus());
+
+
+
+                        }
+
+
+
+                    }
+
+
+
+                });
+
+
+
+                // 确保坐标使用BD09坐标系
+                console.log('原始坐标 - 起点:', closestSupply.lng, closestSupply.lat, '终点:', demandPoint.lng, demandPoint.lat);
+                const startCoord = normalizeBikeToBd09(closestSupply.lng, closestSupply.lat);
+                const endCoord = normalizeBikeToBd09(demandPoint.lng, demandPoint.lat);
+                console.log('转换后坐标 - 起点:', startCoord, '终点:', endCoord);
+                
+                if (startCoord && endCoord) {
+                    const start = new BMap.Point(startCoord.lng, startCoord.lat);
+                    const end = new BMap.Point(endCoord.lng, endCoord.lat);
+                    console.log('调用百度地图API搜索路线:', start, end);
+                    drivingRoute.search(start, end);
+                } else {
+                    console.warn('坐标转换失败，使用直线路线');
+                }
+
+
+
+            } catch (error) {
+
+
+
+                console.warn('使用百度地图API获取路线失败:', error);
+
+
+
+                // 如果API调用失败，使用直线路线
+
+
+
+            }
 
 
 
@@ -6581,29 +6500,19 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 
 
-            closestSupply.transfer += route.properties.amount; // 供应点减少（因为transfer是负数）
+            closestSupply.transfer += route.properties.total_transfer; // 供应点减少（因为transfer是负数）
 
 
 
             if (closestSupply.transfer >= 0) { // 供应耗尽
 
-
-
-                const supplyIndex = supplyPoints.findIndex(s => s.id === closestSupply.id);
-
-
+                const supplyIndex = supplyPoints.findIndex(s => s.id === closestSupply.id || s.name === closestSupply.name);
 
                 if (supplyIndex >= 0) {
 
-
-
                     supplyPoints.splice(supplyIndex, 1);
 
-
-
                 }
-
-
 
             }
 
@@ -6613,33 +6522,9 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 
 
-            // 减少需求点的数常
+            // 减少需求点的数量
 
-
-            demandPoint.transfer -= route.properties.amount; // 需求点减少
-
-
-
-            if (demandPoint.transfer <= 0) { // 需求满足
-
-
-                const demandIndex = demandPoints.findIndex(d => d.id === demandPoint.id);
-
-
-
-                if (demandIndex >= 0) {
-
-
-
-                    demandPoints.splice(demandIndex, 1);
-
-
-
-                }
-
-
-
-            }
+            demandPoint.transfer -= route.properties.total_transfer; // 需求点减少
 
 
 
@@ -6675,6 +6560,158 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 
 
+// 路线颜色数组
+const ROUTE_COLORS = [
+    '#1a73e8', // 蓝色
+    '#34a853', // 绿色
+    '#fbbc05', // 黄色
+    '#ea4335', // 红色
+    '#9c27b0', // 紫色
+    '#00bcd4', // 青色
+    '#ff9800', // 橙色
+    '#795548'  // 棕色
+];
+
+// 更新地图上的路线
+
+
+
+function updateRouteOnMap(route) {
+
+
+
+    if (!map || !route || !route.geometry || !route.geometry.coordinates) return;
+
+
+
+    // 清除旧的路线
+
+
+
+    dispatchLines = dispatchLines.filter(line => {
+
+
+
+        if (line.routeId === route.properties.id) {
+
+
+
+            map.removeOverlay(line);
+
+
+
+            return false;
+
+
+
+        }
+
+
+
+        return true;
+
+
+
+    });
+
+
+
+    // 绘制新的路线
+
+
+
+    const coordinates = route.geometry.coordinates;
+
+
+
+    if (coordinates.length < 2) return;
+
+
+
+    const points = coordinates.map(coord => {
+
+
+
+        return new BMap.Point(coord[0], coord[1]);
+
+
+
+    });
+
+
+
+    // 使用完整路线渲染
+
+
+
+    const vehicleIdNum = Number(route.properties.vehicle_id?.replace(/\D/g, '')) || 0;
+
+
+
+    const colorIndex = vehicleIdNum % ROUTE_COLORS.length;
+
+
+
+    const color = ROUTE_COLORS[colorIndex];
+
+
+
+    const polyline = new BMap.Polyline(points, {
+
+
+
+        strokeColor: color,
+
+
+
+        strokeWeight: 4,
+
+
+
+        strokeOpacity: 0.85,
+
+
+
+        strokeStyle: 'solid',
+
+
+
+        zIndex: 9999 // 设置较高的zIndex，确保在选址范围之上
+
+
+
+    });
+
+
+
+    polyline.routeId = route.properties.id;
+
+
+
+    polyline.routeColor = color;
+
+
+
+    polyline.routeIndex = Number(route.properties.id?.replace(/\D/g, '')) || 0;
+
+
+
+    polyline.vehicleId = route.properties.vehicle_id;
+
+
+
+    map.addOverlay(polyline);
+
+
+
+    dispatchLines.push(polyline);
+
+
+
+}
+
+
+
 
 
 
@@ -6685,31 +6722,61 @@ function generateDispatchRoutes(parkingPoints, timeSlot) {
 
 function renderDispatch(geoJson) {
 
-
+    console.log('====== 进入 renderDispatch 函数 ======');
+    console.log('接收到的 geoJson 数据:', geoJson);
+    
+    // 保存当前调度路线数据
+    window.currentDispatchGeoJson = geoJson;
 
     // 清除旧的调度路线
-
-
-
     dispatchLines.forEach(line => map.removeOverlay(line));
-
-
-
     dispatchMarkers.forEach(marker => map.removeOverlay(marker));
-
-
-
     dispatchLines = [];
-
-
-
     dispatchMarkers = [];
+    activeDispatchRouteIndex = null;
+    if (window.currentInfoWindow && map) {
+        map.closeInfoWindow(window.currentInfoWindow);
+        window.currentInfoWindow = null;
+    }
+    
+    // ⭐关键修复！隐藏所有旧的智能选址和人工选址标记，只显示调度标记！
+    console.log('隐藏旧的智能和人工标记！');
+    smartMarkers.forEach(item => {
+        if (item.marker && item.marker._isOnMap) {
+            try {
+                map.removeOverlay(item.marker);
+                item.marker._isOnMap = false;
+            } catch (e) {}
+        }
+    });
+    smartCircles.forEach(circle => {
+        if (circle._isOnMap) {
+            try {
+                map.removeOverlay(circle);
+                circle._isOnMap = false;
+            } catch (e) {}
+        }
+    });
+    manualMarkers.forEach(item => {
+        if (item.marker && item.marker._isOnMap) {
+            try {
+                map.removeOverlay(item.marker);
+                item.marker._isOnMap = false;
+            } catch (e) {}
+        }
+    });
+    manualCircles.forEach(circle => {
+        if (circle._isOnMap) {
+            try {
+                map.removeOverlay(circle);
+                circle._isOnMap = false;
+            } catch (e) {}
+        }
+    });
 
 
 
-    // 动态颜色数组，为不同车辆分配不同颜色
-    const colorPalette = ['#9c27b0', '#2196f3', '#ff9800', '#4caf50', '#f44336', '#00bcd4', '#e91e63', '#795548'];
-    let routeIndex = 0;
+    // 按调度车编号分配颜色
 
 
 
@@ -6726,101 +6793,718 @@ function renderDispatch(geoJson) {
     // 分离LineString和Point要素，LineString是路线，Point是起终点标记
     const lineFeatures = geoJson.features.filter(f => f.geometry && f.geometry.type === 'LineString');
     const pointFeatures = geoJson.features.filter(f => f.geometry && f.geometry.type === 'Point');
+    
+    // 调试信息
+    console.log('=== 渲染调度结果 ===');
+    console.log('路线数量:', lineFeatures.length);
+    console.log('选址点标记数量:', pointFeatures.length);
+    console.log('选址点数据:', pointFeatures);
 
     // 首先渲染所有路线
-    lineFeatures.forEach((feature, idx) => {
+    lineFeatures.forEach((feature, routeIndex) => {
 
+        console.log('====== 处理路线', routeIndex, '======');
+        console.log('路线 feature:', feature);
 
-
-        if (!feature.geometry || !feature.geometry.coordinates) return;
-
-
+        if (!feature.geometry || !feature.geometry.coordinates) {
+            console.log('路线', routeIndex, '缺少 geometry 或 coordinates');
+            return;
+        }
 
         const coordinates = feature.geometry.coordinates;
+        console.log('路线', routeIndex, 'coordinates 数量:', coordinates.length);
+        console.log('路线', routeIndex, 'coordinates:', coordinates);
 
+        if (coordinates.length < 2) {
+            console.log('路线', routeIndex, 'coordinates 不足 2 个点，跳过');
+            return;
+        }
 
+        const vehicleIdRaw = feature.properties?.vehicle_id;
+        const vehicleIdNum = parseInt(String(vehicleIdRaw || '').replace(/\D/g, ''), 10);
+        const vehicleColorIndex = Number.isFinite(vehicleIdNum) && vehicleIdNum > 0 ? vehicleIdNum - 1 : routeIndex;
+        const color = DISPATCH_COLORS[vehicleColorIndex % DISPATCH_COLORS.length];
 
-        if (coordinates.length < 2) return;
+        console.log('路线', routeIndex, '颜色:', color);
 
+        // 检查是否有路段信息（segment_road_coords）
+        const segmentRoadCoords = feature.properties?.segment_road_coords || [];
 
+        if (segmentRoadCoords.length > 0) {
+            // 如果有路段信息，为每个路段创建单独的polyline，这样可以点击查看每段信息
+            console.log('路线', routeIndex, '使用分段渲染，段数:', segmentRoadCoords.length);
+            
+            segmentRoadCoords.forEach((segmentCoords, segmentIndex) => {
+                if (!segmentCoords || segmentCoords.length < 2) return;
 
-        // 创建百度地图点数
-        const points = coordinates.map(coord => {
+                // 转换坐标系：确保使用BD09格式
+                const points = segmentCoords.map(coord => {
+                    const normalized = normalizeBikeToBd09(coord[0], coord[1]);
+                    return normalized ? new BMap.Point(normalized.lng, normalized.lat) : null;
+                }).filter(Boolean);
+                
+                if (points.length < 2) return;
 
-            const [lng, lat] = coord;
+                // 转换为用于箭头计算的点格式
+                const routePointsForArrows = segmentCoords.map(coord => {
+                    const normalized = normalizeBikeToBd09(coord[0], coord[1]);
+                    return normalized;
+                }).filter(Boolean);
 
-            return new BMap.Point(lng, lat);
+                // 创建箭头符号
+                const arrowSymbol = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+                    scale: 0.8,
+                    strokeWeight: 1,
+                    strokeColor: color,
+                    fillColor: color,
+                    fillOpacity: 0.9
+                });
 
-        });
+                // 创建折线
+                const polyline = new BMap.Polyline(points, {
+                    strokeColor: color,
+                    strokeWeight: 5,
+                    strokeOpacity: 0.8,
+                    zIndex: 99999 // 设置非常高的zIndex，确保在所有图层之上
+                });
 
+                // 存储路线颜色和索引用于后续高亮
+                polyline.routeColor = color;
+                polyline.routeIndex = routeIndex;
+                polyline.vehicleId = feature.properties?.vehicle_id || routeIndex + 1;
+                polyline.routeId = feature.properties?.id;
+                polyline.feature = feature;
+                polyline.segmentIndex = segmentIndex;
+                
+                // 直接使用后端返回的路线数据，与换电路线的处理方式一致
+                // 这样可以确保调度路线也能按照路网走
+                console.log('使用后端返回的路线数据，段点数量:', segmentCoords.length);
+                console.log('为分段路线添加点击事件监听器:', { routeIndex, segmentIndex });
+                // 确保事件监听器正确绑定
+                polyline.addEventListener('click', function (e) {
+                    console.log('分段路线点击事件触发:', e);
+                    console.log('路线索引:', routeIndex, '路段索引:', segmentIndex);
+                    console.log('当前路线对象:', this);
+                    // 确保feature对象存在
+                    if (feature) {
+                        console.log('Feature对象存在，调用highlightRouteSegment');
+                        highlightRouteSegment(routeIndex, feature, segmentIndex);
+                    } else {
+                        console.log('Feature对象不存在，无法调用highlightRouteSegment');
+                    }
+                });
 
+                map.addOverlay(polyline);
+                dispatchLines.push(polyline);
+            });
+        } else {
+            // 如果没有路段信息，创建单一的polyline表示整条路线
+            console.log('路线', routeIndex, '使用完整路线渲染');
+            
+            const points = coordinates.map(coord => {
+                const normalized = normalizeBikeToBd09(coord[0], coord[1]);
+                return normalized ? new BMap.Point(normalized.lng, normalized.lat) : null;
+            }).filter(Boolean);
+            
+            if (points.length < 2) return;
 
-        // 使用动态颜色
-        const color = colorPalette[routeIndex % colorPalette.length];
+            // 转换为用于箭头计算的点格式
+            const routePointsForArrows = coordinates.map(coord => {
+                const normalized = normalizeBikeToBd09(coord[0], coord[1]);
+                return normalized;
+            }).filter(Boolean);
 
+            // 创建箭头符号
+            const arrowSymbol = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+                scale: 0.8,
+                strokeWeight: 1,
+                strokeColor: color,
+                fillColor: color,
+                fillOpacity: 0.9
+            });
 
+            // 创建折线并添加箭头装饰（每个路段只在中间添加一个箭头）
+            const polyline = new BMap.Polyline(points, {
+                strokeColor: color,
+                strokeWeight: 5,
+                strokeOpacity: 0.8,
+                zIndex: 99999, // 设置非常高的zIndex，确保在所有图层之上
+                icons: [
+                    {
+                        icon: arrowSymbol,
+                        offset: '50%',
+                        repeat: 0
+                    }
+                ]
+            });
 
-        // 创建路线
-        const polyline = new BMap.Polyline(points, {
+            polyline.routeColor = color;
+            polyline.routeIndex = routeIndex;
+            polyline.vehicleId = feature.properties?.vehicle_id || routeIndex + 1;
+            polyline.routeId = feature.properties?.id;
+            polyline.feature = feature;
+            polyline.segmentIndex = undefined;
+            
+            // 直接使用后端返回的路线数据，与换电路线的处理方式一致
+            // 这样可以确保调度路线也能按照路网走
+            console.log('使用后端返回的路线数据，点数量:', feature.geometry.coordinates.length);
+            console.log('为完整路线添加点击事件监听器:', { routeIndex });
+            // 确保事件监听器正确绑定
+            polyline.addEventListener('click', function (e) {
+                console.log('完整路线点击事件触发:', e);
+                console.log('路线索引:', routeIndex);
+                console.log('当前路线对象:', this);
+                // 确保feature对象存在
+                if (feature) {
+                    console.log('Feature对象存在，调用highlightRouteSegment');
+                    highlightRouteSegment(routeIndex, feature, undefined);
+                } else {
+                    console.log('Feature对象不存在，无法调用highlightRouteSegment');
+                }
+            });
 
-            strokeColor: color,
-
-            strokeWeight: 3,
-
-            strokeOpacity: 0.8
-
-        });
-
-
-
-        // 存储路线颜色和索引用于后续高亮
-        polyline.routeColor = color;
-        polyline.routeIndex = routeIndex;
-        polyline.vehicleId = feature.properties?.vehicle_id || routeIndex + 1;
-
-
-
-        map.addOverlay(polyline);
-
-        dispatchLines.push(polyline);
-
-        routeIndex++;
+            map.addOverlay(polyline);
+            dispatchLines.push(polyline);
+        }
 
     });
 
 
     // 渲染起终点标记（通过Point要素）
-    pointFeatures.forEach(feature => {
+    console.log('开始渲染选址点标记，共', pointFeatures.length, '个');
+    pointFeatures.forEach((feature, pointIndex) => {
 
+        console.log('渲染选址点', pointIndex + 1, ':', feature.properties?.name);
         const [lng, lat] = feature.geometry.coordinates;
-        const point = new BMap.Point(lng, lat);
+        console.log('原始坐标:', [lng, lat]);
+        // 转换坐标系：确保使用BD09格式
+        const normalized = normalizeBikeToBd09(lng, lat);
+        console.log('转换后坐标:', normalized);
+        if (!normalized) {
+            console.log('坐标转换失败，跳过:', feature.properties?.name);
+            return;
+        }
+        const point = new BMap.Point(normalized.lng, normalized.lat);
+        console.log('创建标记位置:', point);
         const typeText = feature.properties?.type_text || '需求';
         const isSupply = typeText === '供应';
+        const name = feature.properties?.name || '未知点';
+        const transferAmount = feature.properties?.transfer_amount || 0;
+        const vehicleId = feature.properties?.vehicle_id || '';
+        const routeName = feature.properties?.route_name || '';
+        
+        console.log('选址点信息:', { name, typeText, vehicleId, routeName, transferAmount });
 
-        const marker = new BMap.Marker(point, {
-            icon: new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
-                scale: 1.2,
-                strokeWeight: 1,
-                strokeColor: isSupply ? "#27ae60" : "#e74c3c",
-                fillColor: isSupply ? "#27ae60" : "#e74c3c",
-                fillOpacity: 0.9
-            })
+        // 使用最原始、最简单的方案：直接用 Label 作为标记，这样最稳定！
+        const markerLabel = new BMap.Label(isSupply ? '供' : '需', {
+            position: point,
+            offset: new BMap.Size(-12, -12) // 精确居中对齐
         });
-
-        map.addOverlay(marker);
-        dispatchMarkers.push(marker);
+        
+        markerLabel.setStyle({
+            color: 'white',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            backgroundColor: isSupply ? '#34a853' : '#ea4335',
+            border: '2px solid white',
+            borderRadius: '50%',
+            width: '30px',
+            height: '30px',
+            textAlign: 'center',
+            lineHeight: '30px',
+            padding: '0',
+            cursor: 'pointer',
+            zIndex: 1000 + pointIndex // 降低z-index，确保路段在上方
+        });
+        
+        // 保存信息到标签上
+        markerLabel.markerInfo = {
+            name: name,
+            typeText: typeText,
+            vehicleId: vehicleId,
+            routeName: routeName,
+            transferAmount: transferAmount
+        };
+        
+        // 直接给 Label 添加点击事件
+        markerLabel.addEventListener('click', function(e) {
+            console.log('点击了选址点!', e);
+            // 阻止事件冒泡
+            if (e && e.stopPropagation) {
+                e.stopPropagation();
+            }
+            
+            const info = this.markerInfo;
+            const infoContent = `
+                <div style="padding:10px;font-size:14px;">
+                    <h4 style="margin:0 0 10px 0;color:#333;">选址点信息</h4>
+                    <div style="margin:5px 0;"><strong>名称：</strong>${info.name}</div>
+                    <div style="margin:5px 0;"><strong>类型：</strong>${info.typeText}</div>
+                    <div style="margin:5px 0;"><strong>调度车辆：</strong>${info.vehicleId}</div>
+                    <div style="margin:5px 0;"><strong>路线：</strong>${info.routeName}</div>
+                    <div style="margin:5px 0;"><strong>转运数量：</strong>${info.transferAmount} 辆</div>
+                </div>
+            `;
+            
+            const infoWindow = new BMap.InfoWindow(infoContent, {
+                width: 250,
+                height: 180,
+                title: '选址点详情'
+            });
+            
+            // 在该点打开信息窗口
+            map.openInfoWindow(infoWindow, point);
+        });
+        
+        console.log('添加标记到地图:', name);
+        map.addOverlay(markerLabel);
+        dispatchMarkers.push(markerLabel);
+        console.log('标记添加完成:', name);
 
     });
+    console.log('选址点标记渲染完成，共添加', dispatchMarkers.length, '个标记');
 
-
-
+    updateDispatchTable(lineFeatures);
+    
+    // 添加一个测试：遍历所有标记并打印它们的事件监听状态
+    dispatchMarkers.forEach((marker, idx) => {
+        console.log(`标记 ${idx} 检查:`, marker);
+    });
+    
+    // ⭐修复：重新显示智能和人工选址标记！
+    console.log('恢复显示智能和人工选址标记！');
+    smartMarkers.forEach(item => {
+        if (item.marker && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    smartCircles.forEach(circle => {
+        if (!circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    manualMarkers.forEach(item => {
+        if (item.marker && !item.marker._isOnMap) {
+            try {
+                map.addOverlay(item.marker);
+                item.marker._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    manualCircles.forEach(circle => {
+        if (!circle._isOnMap) {
+            try {
+                map.addOverlay(circle);
+                circle._isOnMap = true;
+            } catch (e) {}
+        }
+    });
+    
+    // ⭐修复：重新添加调度路线，确保它们在图层最上方
+    console.log('重新添加调度路线到图层最上方！');
+    dispatchLines.forEach(line => {
+        try {
+            map.removeOverlay(line);
+            map.addOverlay(line);
+        } catch (e) {}
+    });
 }
 
+// 更新调度表格
+function updateDispatchTable(lineFeatures) {
+    const tableBody = document.getElementById('dispatch-table-body');
+    if (!tableBody) return;
 
+    if (lineFeatures.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="7" style="color:#999;padding:10px;text-align:center;">请运行调度优化</td></tr>';
+        return;
+    }
 
+    let html = '';
+    let segmentIndex = 1;
 
+    // 遍历每个路线特征
+    lineFeatures.forEach((feature, routeIndex) => {
+        const vehicleIdRaw = feature.properties?.vehicle_id;
+        const vehicleIdMatch = String(vehicleIdRaw ?? '').match(/(\d+)/);
+        const vehicleId = vehicleIdMatch ? Number(vehicleIdMatch[1]) : (routeIndex + 1);
+        
+        // 检查是否有路段信息
+        const segmentRoadCoords = feature.properties?.segment_road_coords || [];
+        const segmentTransfers = feature.properties?.segment_transfers || [];
+        const path = feature.properties?.path || [];
+        
+        // 如果有路段信息，显示每个路段
+        if (segmentRoadCoords.length > 0 && path.length > 1) {
+            for (let i = 0; i < segmentRoadCoords.length; i++) {
+                const from = path[i] || '未知点';
+                const to = path[i + 1] || '未知点';
+                const transfer = segmentTransfers[i] || 0;
+                
+                // 显示所有路段，包括转运数量为0的路段
+                // 计算路段距离
+                const roadCoords = segmentRoadCoords[i];
+                let distance = 0;
+                for (let j = 0; j < roadCoords.length - 1; j++) {
+                    const p1 = roadCoords[j];
+                    const p2 = roadCoords[j + 1];
+                    distance += Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2)) * 111319;
+                }
+                
+                html += `
+                    <tr class="route-row" data-route-index="${routeIndex}" data-segment-index="${i}">
+                        <td style="text-align:center;">${vehicleId}</td>
+                        <td style="text-align:center;">${segmentIndex}</td>
+                        <td style="text-align:center;">${from}</td>
+                        <td style="text-align:center;">${to}</td>
+                        <td style="text-align:center;">${transfer}</td>
+                        <td style="text-align:center;">${(distance / 1000).toFixed(2)} km</td>
+                        <td style="text-align:center;">${Math.round(distance / 1000 / 15 * 60)} 分钟</td>
+                    </tr>
+                `;
+                segmentIndex++;
+            }
+        } else {
+            // 如果没有路段信息，显示整条路线
+            const load = feature.properties?.total_transfer || feature.properties?.load || 0;
+            const from = feature.properties?.from_name || feature.properties?.from || '未知点';
+            const to = feature.properties?.to_name || feature.properties?.to || '未知点';
+            const distance = feature.properties?.total_distance || feature.properties?.distance || 0;
+            
+            html += `
+                <tr class="route-row" data-route-index="${routeIndex}">
+                    <td style="text-align:center;">${vehicleId}</td>
+                    <td style="text-align:center;">${segmentIndex}</td>
+                    <td style="text-align:center;">${from}</td>
+                    <td style="text-align:center;">${to}</td>
+                    <td style="text-align:center;">${load}</td>
+                    <td style="text-align:center;">${(distance / 1000).toFixed(2)} km</td>
+                    <td style="text-align:center;">${Math.round(distance / 1000 / 15 * 60)} 分钟</td>
+                </tr>
+            `;
+            segmentIndex++;
+        }
+    });
 
+    tableBody.innerHTML = html;
 
+    // 添加点击事件以高亮路线
+    document.querySelectorAll('.route-row').forEach(row => {
+        row.addEventListener('click', function () {
+            const routeIndex = parseInt(this.getAttribute('data-route-index'));
+            const segmentIndex = parseInt(this.getAttribute('data-segment-index') || 0);
+            highlightRouteSegment(routeIndex, null, segmentIndex);
+        });
+    });
+}
+
+// 高亮路线段并定位，显示路段信息
+function resetDispatchRouteHighlight() {
+    activeDispatchRouteIndex = null;
+    activeSegmentIndex = null;
+    dispatchLines.forEach(line => {
+        // 只对有这些方法的对象调用，确保是路线对象
+        if (line.setStrokeColor && line.setStrokeWeight) {
+            line.setStrokeColor(line.routeColor);
+            line.setStrokeWeight(5);
+        }
+    });
+    // 删除临时路段高亮折线
+    if (tempSegmentLine && map) {
+        map.removeOverlay(tempSegmentLine);
+        tempSegmentLine = null;
+    }
+    if (window.currentInfoWindow && map) {
+        map.closeInfoWindow(window.currentInfoWindow);
+        window.currentInfoWindow = null;
+    }
+}
+
+function highlightRouteSegment(routeIndex, feature, segmentIndex) {
+    console.log('进入 highlightRouteSegment 函数:', { routeIndex, segmentIndex, feature: !!feature });
+    
+    // 判断是否点击了同一个路段（同一个routeIndex和segmentIndex）
+    if (activeDispatchRouteIndex === routeIndex && activeSegmentIndex === segmentIndex) {
+        // 点击同一个路段，取消高亮
+        console.log('点击同一个路段，取消高亮');
+        resetDispatchRouteHighlight();
+        return;
+    }
+    // 对于完整路线（segmentIndex为undefined），如果点击的是同一路线，也取消高亮
+    if (activeDispatchRouteIndex === routeIndex && segmentIndex === undefined && activeSegmentIndex === undefined) {
+        // 点击同一个完整路线，取消高亮
+        console.log('点击同一个完整路线，取消高亮');
+        resetDispatchRouteHighlight();
+        return;
+    }
+
+    // 如果没有传入feature，从dispatchLines中获取
+    if (!feature) {
+        // 查找对应路线的第一个路段，获取其feature
+        console.log('没有传入feature，从dispatchLines中查找');
+        for (let i = 0; i < dispatchLines.length; i++) {
+            if (dispatchLines[i].routeIndex === routeIndex) {
+                feature = dispatchLines[i].feature;
+                console.log('找到feature:', !!feature);
+                break;
+            }
+        }
+    }
+    if (!feature) {
+        console.log('没有找到feature，退出函数');
+        return;
+    }
+
+    // 重置所有路线的高亮状态
+    console.log('重置所有路线的高亮状态');
+    dispatchLines.forEach((line, index) => {
+        if (line.setStrokeColor && line.setStrokeWeight) {
+            line.setStrokeColor(line.routeColor);
+            line.setStrokeWeight(5);
+        }
+    });
+
+    // 删除旧的临时路段高亮折线
+    if (tempSegmentLine && map) {
+        console.log('删除旧的临时路段高亮折线');
+        map.removeOverlay(tempSegmentLine);
+        tempSegmentLine = null;
+    }
+
+    // 关闭当前信息窗口
+    if (window.currentInfoWindow && map) {
+        console.log('关闭当前信息窗口');
+        map.closeInfoWindow(window.currentInfoWindow);
+        window.currentInfoWindow = null;
+    }
+
+    // 检查是否有路段信息
+    const segmentRoadCoords = feature.properties?.segment_road_coords || [];
+    console.log('路段信息:', { segmentRoadCoordsLength: segmentRoadCoords.length, segmentIndex });
+
+    if (segmentRoadCoords.length > 0 && segmentIndex !== undefined) {
+        // 如果有路段信息，只高亮显示指定的路段
+        const roadCoords = segmentRoadCoords[segmentIndex];
+        if (roadCoords) {
+            console.log('有路段信息，高亮显示指定路段');
+            // 转换坐标系：确保使用BD09格式
+            const normalizedCoords = roadCoords.map(coord => {
+                const normalized = normalizeBikeToBd09(coord[0], coord[1]);
+                if (!normalized) {
+                    return new BMap.Point(coord[0], coord[1]);
+                }
+                return new BMap.Point(normalized.lng, normalized.lat);
+            });
+            
+            // 创建临时折线来高亮显示路段
+            tempSegmentLine = new BMap.Polyline(
+                normalizedCoords,
+                {
+                    strokeColor: DISPATCH_HIGHLIGHT_COLOR,
+                    strokeWeight: 5,
+                    strokeOpacity: 0.8,
+                    zIndex: 10000 // 设置更高的zIndex，确保高亮路段在最上方
+                }
+            );
+            // 为临时高亮折线添加点击事件，点击时取消高亮
+            tempSegmentLine.addEventListener('click', function() {
+                console.log('临时高亮折线点击事件触发');
+                highlightRouteSegment(routeIndex, feature, segmentIndex);
+            });
+            console.log('添加临时高亮折线到地图');
+            map.addOverlay(tempSegmentLine);
+
+            // 定位到该路段（使用当前缩放级别，避免突然放大或缩小）
+            if (roadCoords.length > 0) {
+                const startCoord = normalizeBikeToBd09(roadCoords[0][0], roadCoords[0][1]);
+                const endCoord = normalizeBikeToBd09(roadCoords[roadCoords.length - 1][0], roadCoords[roadCoords.length - 1][1]);
+                
+                if (startCoord && endCoord) {
+                    const centerPoint = new BMap.Point(
+                        (startCoord.lng + endCoord.lng) / 2,
+                        (startCoord.lat + endCoord.lat) / 2
+                    );
+                    console.log('定位到路段中心:', centerPoint);
+                    map.panTo(centerPoint);
+                }
+            }
+
+            // 显示路段信息
+            const segmentTransfers = feature.properties?.segment_transfers || [];
+            const path = feature.properties?.path || [];
+            const transfer = segmentTransfers[segmentIndex] || 0;
+            const from = path[segmentIndex] || '未知点';
+            const to = path[segmentIndex + 1] || '未知点';
+
+            // 计算路段距离
+            let distance = 0;
+            for (let j = 0; j < roadCoords.length - 1; j++) {
+                const p1 = roadCoords[j];
+                const p2 = roadCoords[j + 1];
+                distance += Math.sqrt(Math.pow(p2[0] - p1[0], 2) + Math.pow(p2[1] - p1[1], 2)) * 111319;
+            }
+
+            // 获取起点和终点的类型
+            let fromType = '未知';
+            let toType = '未知';
+            
+            // 尝试从原始数据中获取类型信息
+            if (feature.properties?.path_types && feature.properties?.path_types.length > segmentIndex + 1) {
+                fromType = feature.properties.path_types[segmentIndex] || '未知';
+                toType = feature.properties.path_types[segmentIndex + 1] || '未知';
+            }
+            
+            // 创建路段信息对象
+            const segmentFeature = {
+                properties: {
+                    vehicle_id: feature.properties?.vehicle_id || '',
+                    from: from,
+                    to: to,
+                    from_type: fromType,
+                    to_type: toType,
+                    total_transfer: transfer,
+                    total_distance: distance
+                }
+            };
+
+            console.log('显示路段信息:', segmentFeature);
+            showSegmentInfo(segmentFeature, segmentIndex + 1);
+        }
+    } else {
+        // 如果没有路段信息，高亮显示整条路线
+        console.log('没有路段信息，高亮显示整条路线');
+        // 查找所有属于该路线的路段
+        const routeLines = dispatchLines.filter(line => line.routeIndex === routeIndex);
+        if (routeLines.length > 0) {
+            // 高亮显示所有属于该路线的路段
+            routeLines.forEach(line => {
+                if (line.setStrokeColor && line.setStrokeWeight) {
+                    console.log('设置路线高亮颜色:', DISPATCH_HIGHLIGHT_COLOR);
+                    line.setStrokeColor(DISPATCH_HIGHLIGHT_COLOR);
+                    line.setStrokeWeight(5);
+                }
+                // 为路段添加点击事件监听器，以便取消高亮
+                line.addEventListener('click', function() {
+                    console.log('路段点击事件触发，取消高亮');
+                    resetDispatchRouteHighlight();
+                });
+            });
+            // 定位到该路线（使用当前缩放级别，避免突然放大或缩小）
+            const firstLine = routeLines[0];
+            if (firstLine && firstLine.getPath) {
+                const points = firstLine.getPath();
+                if (points.length > 0) {
+                    const centerPoint = points[Math.floor(points.length / 2)];
+                    console.log('定位到路线中心:', centerPoint);
+                    map.panTo(centerPoint);
+                }
+            }
+            // 显示路段信息
+            console.log('显示整条路线信息:', feature);
+            showSegmentInfo(feature, routeIndex + 1);
+        } else {
+            console.log('没有找到该路线的路段，无法高亮');
+        }
+    }
+
+    // 更新当前高亮状态
+    console.log('更新当前高亮状态:', { routeIndex, segmentIndex });
+    activeDispatchRouteIndex = routeIndex;
+    activeSegmentIndex = segmentIndex;
+}
+
+// 显示路段信息（弹窗）
+function showSegmentInfo(feature, segmentIndex) {
+    // 提取信息
+    const vehicleIdRaw = feature.properties?.vehicle_id ?? feature.properties?.vehicle_name ?? '';
+    const vehicleIdMatch = String(vehicleIdRaw).match(/(\d+)/);
+    const vehicleId = vehicleIdMatch ? Number(vehicleIdMatch[1]) : '未知';
+    const load = feature.properties?.total_transfer || feature.properties?.load || 0;
+    const from = feature.properties?.from_name || feature.properties?.from || '未知点';
+    const to = feature.properties?.to_name || feature.properties?.to || '未知点';
+    const distance = feature.properties?.total_distance || feature.properties?.distance || 0;
+    const fromType = feature.properties?.from_type || '未知';
+    const toType = feature.properties?.to_type || '未知';
+
+    const content = `
+        <div style="padding:10px;font-size:14px;">
+            <h4 style="margin:0 0 10px 0;color:#333;">路段信息</h4>
+            <div style="margin:5px 0;"><strong>调度车序号：</strong>${vehicleId}</div>
+            <div style="margin:5px 0;"><strong>路段序号：</strong>${segmentIndex}</div>
+            <div style="margin:5px 0;"><strong>起点：</strong>${from} (${fromType})</div>
+            <div style="margin:5px 0;"><strong>终点：</strong>${to} (${toType})</div>
+            <div style="margin:5px 0;"><strong>转运数量：</strong>${load} 辆</div>
+            <div style="margin:5px 0;"><strong>路程：</strong>${(distance / 1000).toFixed(2)} km</div>
+            <div style="margin:5px 0;"><strong>预计时间：</strong>${Math.round(distance / 1000 / 15 * 60)} 分钟</div>
+        </div>
+    `;
+
+    // 检查是否有geometry坐标信息
+    if (feature.geometry && feature.geometry.coordinates && feature.geometry.coordinates.length > 0) {
+        const points = feature.geometry.coordinates;
+        const centerCoord = points[Math.floor(points.length / 2)];
+        const normalized = normalizeBikeToBd09(centerCoord[0], centerCoord[1]);
+        const centerPoint = normalized ? 
+            new BMap.Point(normalized.lng, normalized.lat) : 
+            new BMap.Point(centerCoord[0], centerCoord[1]);
+
+        // 先关闭其他弹窗
+        if (window.currentInfoWindow) {
+            map.closeInfoWindow(window.currentInfoWindow);
+        }
+
+        const infoWindow = new BMap.InfoWindow(content, {
+            width: 280,
+            height: 200,
+            title: '路段详情'
+        });
+        window.currentInfoWindow = infoWindow;
+        map.openInfoWindow(infoWindow, centerPoint);
+    } else if (tempSegmentLine) {
+        // 如果没有几何坐标但有临时路段，使用临时路段的中心点
+        const points = tempSegmentLine.getPath();
+        if (points && points.length > 0) {
+            const centerIndex = Math.floor(points.length / 2);
+            const centerPoint = points[centerIndex];
+
+            // 先关闭其他弹窗
+            if (window.currentInfoWindow) {
+                map.closeInfoWindow(window.currentInfoWindow);
+            }
+
+            const infoWindow = new BMap.InfoWindow(content, {
+                width: 280,
+                height: 200,
+                title: '路段详情'
+            });
+            window.currentInfoWindow = infoWindow;
+            map.openInfoWindow(infoWindow, centerPoint);
+        }
+    } else {
+        // 如果都没有，使用默认点（地图中心）
+        const centerPoint = map.getCenter();
+        if (centerPoint) {
+            // 先关闭其他弹窗
+            if (window.currentInfoWindow) {
+                map.closeInfoWindow(window.currentInfoWindow);
+            }
+
+            const infoWindow = new BMap.InfoWindow(content, {
+                width: 280,
+                height: 200,
+                title: '路段详情'
+            });
+            window.currentInfoWindow = infoWindow;
+            map.openInfoWindow(infoWindow, centerPoint);
+        }
+    }
+}
 
 // 计算方案得分
 
@@ -6846,7 +7530,7 @@ function calculateSchemeScore(pointCount) {
 
     const coverageScore = Math.max(0, Math.min(coverage, 1)) * 40;
     const distanceScore = Math.max(0, 1 - Math.min(avgDistance, 500) / 500) * 30;
-    const balanceScore = Math.max(0, Math.min(balance, 100)) * 0.3;
+    const balanceScore = Math.max(0, Math.min(balance, 1)) * 30;
 
     return coverageScore + distanceScore + balanceScore;
 
@@ -6855,7 +7539,320 @@ function calculateSchemeScore(pointCount) {
 }
 
 
+// 设置提交分配状态提示
+function setDispatchAssignmentStatus(message, success) {
+    const statusEl = document.getElementById('dispatch-assignment-status');
+    if (!statusEl) {
+        return;
+    }
+    if (!message) {
+        statusEl.textContent = '';
+        statusEl.style.display = 'none';
+        return;
+    }
+    statusEl.textContent = message;
+    statusEl.style.display = 'block';
+    statusEl.style.color = success ? '#155724' : '#721c24';
+    statusEl.style.background = success ? '#e8f5e9' : '#fdecea';
+    statusEl.style.border = success ? '1px solid #a5d6a7' : '1px solid #f5c6cb';
+    statusEl.style.borderRadius = '6px';
+    statusEl.style.padding = '8px 10px';
+}
 
+// 更新右侧数据面板按角色显示
+function updateRightPanelForRole(activeModule) {
+    const isAdmin = currentUserRole === 'admin';
+    const rightPanel = document.querySelector('.right-panel');
+    const dispatchResultCard = document.getElementById('dispatch-result-card');
+    const dispatchSummaryInfo = document.getElementById('dispatch-summary-info');
+    const dispatchResultTitle = document.getElementById('dispatch-result-title');
+    const moduleKey = activeModule || document.querySelector('.menu-item.active')?.getAttribute('data-module') || 'dashboard';
+
+    if (!rightPanel) {
+        return;
+    }
+
+    if (isAdmin) {
+        rightPanel.style.display = '';
+        rightPanel.querySelectorAll('.data-card').forEach(card => {
+            card.style.display = '';
+        });
+        if (dispatchSummaryInfo) {
+            dispatchSummaryInfo.style.display = '';
+        }
+        if (dispatchResultTitle) {
+            dispatchResultTitle.textContent = '调度优化结果';
+        }
+        return;
+    }
+
+    const showDispatcherDispatchTable = moduleKey === 'dispatch';
+    rightPanel.style.display = showDispatcherDispatchTable ? '' : 'none';
+    rightPanel.querySelectorAll('.data-card').forEach(card => {
+        card.style.display = card === dispatchResultCard && showDispatcherDispatchTable ? '' : 'none';
+    });
+    if (dispatchSummaryInfo) {
+        dispatchSummaryInfo.style.display = 'none';
+    }
+    if (dispatchResultTitle) {
+        dispatchResultTitle.textContent = '调度车行驶路段';
+    }
+}
+
+// 提交调度分配
+function submitDispatchAssignment() {
+    if (currentUserRole !== 'admin') {
+        const message = '只有管理员可以提交分配';
+        setDispatchAssignmentStatus(message, false);
+        showToast(message);
+        return;
+    }
+
+    if (!latestDispatchResult || !latestDispatchResult.features) {
+        const message = '提交分配失败：请先运行调度优化';
+        setDispatchAssignmentStatus(message, false);
+        showToast(message);
+        return;
+    }
+
+    // 获取调度路线
+    const lineFeatures = latestDispatchResult.features.filter(f => f.geometry && f.geometry.type === 'LineString');
+    if (lineFeatures.length === 0) {
+        const message = '提交分配失败：没有可分配的调度路线';
+        setDispatchAssignmentStatus(message, false);
+        showToast(message);
+        return;
+    }
+
+    // 初始化用户存储
+    initUserStorage();
+
+    // 从localStorage获取所有调度员
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+    const dispatchers = users.filter(user => user.role === 'dispatcher');
+
+    if (dispatchers.length < lineFeatures.length) {
+        const message = `提交分配失败：调度员数量不足，需要至少${lineFeatures.length}个调度员（当前有${dispatchers.length}个）`;
+        setDispatchAssignmentStatus(message, false);
+        showToast(message);
+        return;
+    }
+
+    // 获取已分配的电池运维调度员（避免重复分配）
+    const storedBatteryAssignments = localStorage.getItem('batteryAssignments');
+    const batteryAssignments = storedBatteryAssignments ? JSON.parse(storedBatteryAssignments) : [];
+    const assignedDispatchers = new Set(batteryAssignments.map(a => a.dispatcher_id));
+
+    // 过滤出未分配的调度员
+    let availableDispatchers = dispatchers.filter(d => !assignedDispatchers.has(d.username));
+
+    if (availableDispatchers.length === 0) {
+        const message = '提交分配失败：所有调度员都已被分配到电池运维任务';
+        setDispatchAssignmentStatus(message, false);
+        showToast(message);
+        return;
+    }
+
+    // 随机分配调度员给调度路线，确保不重复分配
+    const assignments = [];
+    lineFeatures.forEach((feature, index) => {
+        const vehicleId = feature.properties?.vehicle_id || `vehicle_${index + 1}`;
+
+        // 随机选择一个调度员
+        const randomIndex = Math.floor(Math.random() * availableDispatchers.length);
+        const dispatcher = availableDispatchers.splice(randomIndex, 1)[0];
+        const dispatcherId = dispatcher.username;
+
+        assignments.push({
+            vehicle_id: vehicleId,
+            route_id: feature.properties?.id || `route_${index + 1}`,
+            dispatcher_id: dispatcherId,
+            from: feature.properties?.from || '供应点',
+            to: feature.properties?.to || '需求点',
+            distance: feature.properties?.distance || 0
+        });
+    });
+
+    // 保存分配结果到localStorage
+    console.log('[DEBUG] 保存dispatchAssignments:', JSON.stringify(assignments));
+    localStorage.setItem('dispatchAssignments', JSON.stringify(assignments));
+
+    // 保存最新的调度结果到localStorage，以便调度员登录时能恢复
+    if (latestDispatchResult) {
+        localStorage.setItem('latestDispatchResult', JSON.stringify(latestDispatchResult));
+    }
+
+    // 获取分配的调度员列表
+    const assignedDispatcherNames = assignments.map(a => a.dispatcher_id);
+    const uniqueDispatchers = [...new Set(assignedDispatcherNames)];
+    const dispatcherList = uniqueDispatchers.join('、');
+
+    const message = `提交分配成功：已分配 ${assignments.length} 条调度车路线给：${dispatcherList}`;
+    setDispatchAssignmentStatus(message, true);
+    showToast(message);
+}
+
+// 提交电池运维分配
+function submitBatteryAssignment() {
+    if (currentUserRole !== 'admin') {
+        const message = '只有管理员可以提交分配';
+        showToast(message);
+        return;
+    }
+
+    if (!batteryLastRouteResult || !batteryLastRouteResult.routes) {
+        const message = '提交分配失败：请先生成换电路线';
+        showToast(message);
+        return;
+    }
+
+    // 初始化用户存储
+    initUserStorage();
+
+    // 从localStorage获取所有调度员
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+    const dispatchers = users.filter(user => user.role === 'dispatcher');
+
+    if (dispatchers.length < 1) {
+        const message = `提交分配失败：调度员数量不足，至少需要1个调度员（当前有${dispatchers.length}个）`;
+        showToast(message);
+        return;
+    }
+
+    console.log('batteryLastRouteResult.routes 数量:', batteryLastRouteResult.routes.length);
+    // 每次提交分配都重新分配所有路线（清除上一轮分配）
+    const assignments = [];
+    batteryLastRouteResult.routes.forEach((route, index) => {
+        const vehicleId = route.vehicle_id || `battery_vehicle_${index + 1}`;
+        
+        // 轮询选择调度员（每条路线分配一个调度员）
+        const dispatcherIndex = index % dispatchers.length;
+        const dispatcher = dispatchers[dispatcherIndex];
+        const dispatcherId = dispatcher.username;
+        
+        assignments.push({
+            vehicle_id: vehicleId,
+            route_id: route.route_id || `battery_route_${index + 1}`,
+            dispatcher_id: dispatcherId,
+            stations: route.stations || []
+        });
+    });
+    
+    if (assignments.length === 0) {
+        const message = '提交分配失败：没有可分配的路线';
+        showToast(message);
+        return;
+    }
+
+    // 保存电池运维分配结果到localStorage
+    localStorage.setItem('batteryAssignments', JSON.stringify(assignments));
+
+    // 保存电池运维路线结果到localStorage，以便调度员登录时能恢复
+    if (batteryLastRouteResult) {
+        localStorage.setItem('batteryLastRouteResult', JSON.stringify(batteryLastRouteResult));
+    }
+
+    // 获取分配的调度员列表
+    const assignedDispatcherNames = assignments.map(a => a.dispatcher_id);
+    const uniqueDispatchers = [...new Set(assignedDispatcherNames)];
+    const dispatcherList = uniqueDispatchers.join('、');
+
+    const message = `提交分配成功：已分配 ${assignments.length} 条换电路线给：${dispatcherList}`;
+    setBatteryAssignmentStatus(message, true);
+    showToast(message);
+}
+
+// 设置电池运维分配状态
+function setBatteryAssignmentStatus(message, isSuccess) {
+    const statusEl = document.getElementById('battery-assignment-status');
+    if (statusEl) {
+        statusEl.textContent = message;
+        statusEl.style.color = isSuccess ? '#27ae60' : '#e74c3c';
+        statusEl.style.display = 'block';
+    }
+}
+
+// 获取调度员的分配路线
+function getDispatcherRoutes() {
+    if (currentUserRole !== 'dispatcher') {
+        console.log('[DEBUG getDispatcherRoutes] not a dispatcher, returning empty');
+        return [];
+    }
+
+    // 从localStorage获取分配结果
+    const storedAssignments = localStorage.getItem('dispatchAssignments');
+    console.log('[DEBUG getDispatcherRoutes] localStorage.dispatchAssignments:', storedAssignments);
+    
+    const assignments = storedAssignments ? JSON.parse(storedAssignments) : [];
+    console.log('[DEBUG getDispatcherRoutes] parsed assignments:', JSON.stringify(assignments));
+    console.log('[DEBUG getDispatcherRoutes] currentUsername:', currentUsername);
+    
+    const filtered = assignments.filter(assignment => {
+        const match = assignment.dispatcher_id === currentUsername;
+        console.log('[DEBUG getDispatcherRoutes] checking assignment:', assignment.dispatcher_id, '===', currentUsername, '->', match);
+        return match;
+    });
+    
+    console.log('[DEBUG getDispatcherRoutes] filtered routes:', JSON.stringify(filtered));
+    return filtered;
+}
+
+// 获取调度员的换电路线
+function getDispatcherBatteryRoutes() {
+    if (currentUserRole !== 'dispatcher') {
+        return [];
+    }
+
+    // 从localStorage获取分配结果
+    const storedAssignments = localStorage.getItem('batteryAssignments');
+    const assignments = storedAssignments ? JSON.parse(storedAssignments) : [];
+    
+    // 获取分配给自己的路线
+    const myAssignments = assignments.filter(assignment => assignment.dispatcher_id === currentUsername);
+    
+    if (myAssignments.length === 0) {
+        return [];
+    }
+    
+    // 从batteryLastRouteResult中获取完整的路线信息
+    const storedBatteryResult = localStorage.getItem('batteryLastRouteResult');
+    const batteryResult = storedBatteryResult ? JSON.parse(storedBatteryResult) : null;
+    
+    if (!batteryResult || !batteryResult.routes) {
+        return [];
+    }
+    
+    // 构建vehicle_id到路线的映射
+    const routeMap = new Map();
+    batteryResult.routes.forEach(route => {
+        const vehicleId = route.vehicle_id;
+        if (vehicleId) {
+            routeMap.set(vehicleId, route);
+        }
+    });
+    
+    // 生成包含完整信息的路线列表
+    const myRoutes = [];
+    myAssignments.forEach(assignment => {
+        const route = routeMap.get(assignment.vehicle_id);
+        if (route) {
+            myRoutes.push({
+                name: route.route_name || route.name || `换电路线`,
+                vehicle_name: route.vehicle_name || route.vehicle_id || `换电运维车`,
+                start: route.start || route.from || '补给点',
+                end: route.end || route.to || '补给点',
+                service_count: route.ordered_bikes ? route.ordered_bikes.length : 0,
+                distance_m: route.total_distance_m || route.distance_m || route.total_distance || 0,
+                vehicle_id: route.vehicle_id,
+                route_id: route.route_id
+            });
+        }
+    });
+    
+    return myRoutes;
+}
 
 
 
@@ -6940,7 +7937,8 @@ function handleLogin() {
 
 
 
-    const role = document.getElementById('role-select').value;
+    // 根据用户名确定角色，admin是管理员，其他是调度员
+    const role = username === 'admin' ? 'admin' : 'dispatcher';
 
 
 
@@ -6952,10 +7950,7 @@ function handleLogin() {
 
 
 
-    if (username === 'admin' && password === 'admin') {
-
-
-
+    if ((username === 'admin' && password === 'admin') || (username !== 'admin' && password)) {
         // 登录成功
 
 
@@ -6967,16 +7962,47 @@ function handleLogin() {
         document.getElementById('systemPage').style.display = 'flex';
 
         currentUserRole = role;
+        currentUsername = (username || '').trim();
 
 
 
         document.getElementById('currentUser').textContent = role === 'admin' ? '管理员' : '调度员';
+        if (role === 'admin') {
+            resetOperationalStateForAdminLogin();
+            clearBatteryOpsPersistedState();
+            // 显示调度分配按钮
+            const assignmentBtn = document.getElementById('dispatch-assignment-btn');
+            if (assignmentBtn) {
+                assignmentBtn.style.display = '';
+            }
+            // 显示运行调度优化按钮
+            const runDispatchBtn = document.getElementById('run-dispatch-btn');
+            if (runDispatchBtn) {
+                runDispatchBtn.style.display = '';
+            }
+        } else {
+            // 隐藏调度分配按钮
+            const assignmentBtn = document.getElementById('dispatch-assignment-btn');
+            if (assignmentBtn) {
+                assignmentBtn.style.display = 'none';
+            }
+            // 隐藏运行调度优化按钮
+            const runDispatchBtn = document.getElementById('run-dispatch-btn');
+            if (runDispatchBtn) {
+                runDispatchBtn.style.display = 'none';
+            }
 
-        // 每次新登录都清空上一次电池运维遗留状态，避免页面残留
+
+        }
+
+        // 登录时重置电池运维页面内存状态，但保留已生成任务快照，供调度员按编号查看
         resetBatteryOpsStateForNewLogin();
         resetAIPanelStateForNewLogin();
 
         applyRolePermissions();
+        refreshFeedbackList(true).catch(error => {
+            console.error('预加载反馈列表失败:', error);
+        });
 
 
 
@@ -7000,7 +8026,299 @@ function handleLogin() {
 
 
         loadSystemData();
+        
+        // 确保地图初始化完成后，显示相应的标记和调度员路线
+        setTimeout(() => {
+            updateSelectedScheme();
+            
+            // 如果是调度员角色，自动切换到调度模块并恢复调度结果
+            if (currentUserRole === 'dispatcher') {
+                // 自动切换到调度模块
+                const dispatchMenuItem = document.querySelector('.menu-item[data-module="dispatch"]');
+                if (dispatchMenuItem) {
+                    dispatchMenuItem.click();
+                }
 
+                // 恢复调度结果（如果管理员已经运行过调度优化）
+                // 先从localStorage恢复（如果内存中没有）
+                if (!latestDispatchResult) {
+                    const storedDispatch = localStorage.getItem('latestDispatchResult');
+                    if (storedDispatch) {
+                        latestDispatchResult = JSON.parse(storedDispatch);
+                        console.log('已从localStorage恢复调度结果');
+                    }
+                }
+
+                console.log('[DEBUG] latestDispatchResult:', latestDispatchResult ? '存在' : '不存在');
+                console.log('[DEBUG] latestDispatchResult.features数量:', latestDispatchResult?.features?.length || 0);
+                console.log('[DEBUG] currentUsername:', currentUsername);
+                console.log('[DEBUG] currentUserRole:', currentUserRole);
+
+                // 不使用缓存，直接处理调度结果
+                const dispatchRouteCountEl = document.getElementById('dispatch-route-count');
+
+                // 检查分配给当前调度员的路线
+                const dispatcherRoutes = getDispatcherRoutes();
+                console.log('[DEBUG] getDispatcherRoutes()返回:', JSON.stringify(dispatcherRoutes));
+                console.log('[DEBUG] dispatcherRoutes.length:', dispatcherRoutes.length);
+
+                // 检查localStorage中的dispatchAssignments
+                const storedDispatchAssignments = localStorage.getItem('dispatchAssignments');
+                console.log('[DEBUG] localStorage.dispatchAssignments:', storedDispatchAssignments);
+
+                // 检查最新的调度结果中的vehicle_id
+                if (latestDispatchResult && latestDispatchResult.features) {
+                    const lineFeatures = latestDispatchResult.features.filter(f => f.geometry?.type === 'LineString');
+                    console.log('[DEBUG] latestDispatchResult中的LineString数量:', lineFeatures.length);
+                    if (lineFeatures.length > 0) {
+                        console.log('[DEBUG] 最新路线中的vehicle_id示例:', lineFeatures[0].properties?.vehicle_id);
+                    }
+                }
+
+                if (latestDispatchResult && dispatcherRoutes.length > 0) {
+                    console.log('已从内存恢复调度结果');
+                    
+                    // 检查是否有分配给当前调度员的路线
+                    const dispatcherRoutes = getDispatcherRoutes();
+                    if (dispatcherRoutes.length > 0) {
+                        // 过滤出分配给当前调度员的路线（包含LineString和Point要素）
+                        const filteredFeatures = latestDispatchResult.features.filter(feature => {
+                            if (feature.geometry && feature.geometry.type === 'LineString') {
+                                const vehicleId = feature.properties?.vehicle_id;
+                                return dispatcherRoutes.some(route => route.vehicle_id === vehicleId);
+                            }
+                            // 同时保留Point要素（供需点），这样调度员能看到起点和终点
+                            if (feature.geometry && feature.geometry.type === 'Point') {
+                                const vehicleId = feature.properties?.vehicle_id;
+                                return dispatcherRoutes.some(route => route.vehicle_id === vehicleId);
+                            }
+                            return false;
+                        });
+                        
+                        if (filteredFeatures.length > 0) {
+                            // 创建新的GeoJSON对象
+                            const filteredGeojson = {
+                                type: 'FeatureCollection',
+                                features: filteredFeatures
+                            };
+                            
+                            // 显示分配给调度员的路线和供需点
+                            setTimeout(() => {
+                                renderDispatch(filteredGeojson);
+                                updateDispatchSummaryFromResult({ geojson: filteredGeojson });
+                                if (dispatchRouteCountEl) dispatchRouteCountEl.textContent = dispatcherRoutes.length;
+                                setDispatchRouteDetailHint(`已分配 ${dispatcherRoutes.length} 条路线`);
+                                showToast(`已显示分配给您的 ${dispatcherRoutes.length} 条路线及其供需点`);
+                            }, 300);
+                        }
+                    } else {
+                        setDispatchRouteDetailHint('当前未分配路线！');
+                        if (dispatchRouteCountEl) dispatchRouteCountEl.textContent = '0';
+                    }
+                } else {
+                    setDispatchRouteDetailHint('当前未分配路线！');
+                    if (dispatchRouteCountEl) dispatchRouteCountEl.textContent = '0';
+                }
+                
+                // 恢复电池运维结果（如果管理员已经生成过换电任务）
+                // 先从localStorage恢复（如果内存中没有）
+                if (!batteryLastRouteResult) {
+                    const storedBattery = localStorage.getItem('batteryLastRouteResult');
+                    if (storedBattery) {
+                        batteryLastRouteResult = JSON.parse(storedBattery);
+                    }
+                }
+                
+                // 同时恢复batteryRouteAssignments
+                const storedBatteryAssignments = localStorage.getItem('batteryAssignments');
+                if (storedBatteryAssignments) {
+                    try {
+                        const parsedAssignments = JSON.parse(storedBatteryAssignments);
+                        if (parsedAssignments && Array.isArray(parsedAssignments)) {
+                            // 构建bike_assignments对象
+                            const bikeAssignments = {};
+                            parsedAssignments.forEach(a => {
+                                if (a.vehicle_id) {
+                                    bikeAssignments[a.vehicle_id] = {
+                                        route_id: a.route_id,
+                                        dispatcher_id: a.dispatcher_id,
+                                        stations: a.stations || []
+                                    };
+                                }
+                            });
+                            // 合并到batteryRouteAssignments
+                            Object.assign(batteryRouteAssignments, bikeAssignments);
+                            console.log('已从localStorage恢复batteryRouteAssignments');
+                        }
+                    } catch (error) {
+                        console.error('恢复batteryRouteAssignments失败:', error);
+                    }
+                }
+
+                // 不使用缓存，直接处理电池运维结果
+                if (batteryLastRouteResult) {
+                    // 检查是否有分配给当前调度员的电池运维任务
+                    const storedBatteryAssignments = localStorage.getItem('batteryAssignments');
+                    const batteryAssignments = storedBatteryAssignments ? JSON.parse(storedBatteryAssignments) : [];
+                    const myBatteryAssignments = batteryAssignments.filter(a => a.dispatcher_id === currentUsername);
+                    
+                    if (myBatteryAssignments.length > 0) {
+                        // 获取分配给当前调度员的车辆ID列表
+                        const myVehicleIds = myBatteryAssignments.map(a => a.vehicle_id);
+                        setBatteryRouteDetailHint(`已分配 ${myBatteryAssignments.length} 条路线`);
+                        
+                        // 过滤出分配给该调度员的路线
+                        const myRoutes = batteryLastRouteResult.routes.filter(route => 
+                            myVehicleIds.some(vid => String(route.vehicle_id) === String(vid))
+                        );
+                        
+                        if (myRoutes.length > 0) {
+                            // 显示低电量车辆标记和路线
+                            setTimeout(async () => {
+                                try {
+                                    // 先加载低电量车辆数据
+                                    const threshold = Number(document.getElementById('battery-threshold')?.value) || 10;
+                                    const lowBatteryData = await getLowBatteryCandidates(threshold);
+                                    
+                                    // 从路线中提取所有需要服务的低电量车辆ID
+                                    const myBikeIds = new Set();
+                                    myRoutes.forEach(route => {
+                                        if (route.ordered_bikes) {
+                                            route.ordered_bikes.forEach(bike => {
+                                                if (bike.id) {
+                                                    myBikeIds.add(bike.id);
+                                                }
+                                            });
+                                        }
+                                    });
+                                    
+                                    // 过滤出分配给自己的车辆
+                                    let myLowBattery = [];
+                                    if (lowBatteryData && lowBatteryData.bikes && lowBatteryData.bikes.length > 0) {
+                                        myLowBattery = lowBatteryData.bikes.filter(b => myBikeIds.has(b.id));
+                                    }
+                                    
+                                    // 如果从低电量数据中找不到车辆，尝试从路线的ordered_bikes中获取
+                                    if (myLowBattery.length === 0) {
+                                        myRoutes.forEach(route => {
+                                            if (route.ordered_bikes) {
+                                                route.ordered_bikes.forEach(bike => {
+                                                    if (bike.id && !myLowBattery.some(b => b.id === bike.id)) {
+                                                        myLowBattery.push(bike);
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                    
+                                    console.log('过滤后的低电量车辆:', {
+                                        totalLowBattery: lowBatteryData?.bikes?.length || 0,
+                                        myLowBattery: myLowBattery.length,
+                                        myLowBatteryDetails: myLowBattery
+                                    });
+                                    
+                                    renderLowBatteryMarkers(myLowBattery);
+                                    
+                                    // 构建完整的scopedResult对象，确保包含所有必要的信息
+                                    const allScopedBikes = [];
+                                    const allScopedAssignments = {};
+                                    myRoutes.forEach(matchedRoute => {
+                                        const scopedAssignments = buildScopedAssignmentsForRoute(matchedRoute, batteryLastRouteResult?.bike_assignments || {});
+                                        const scopedBikes = getDispatcherScopedBikes(matchedRoute, scopedAssignments);
+                                        allScopedBikes.push(...scopedBikes);
+                                        Object.assign(allScopedAssignments, scopedAssignments);
+                                    });
+                                    
+                                    const scopedResult = {
+                                        routes: myRoutes,
+                                        vehicle_count: myRoutes.length,
+                                        route_count: myRoutes.length,
+                                        bike_count: allScopedBikes.length,
+                                        capacity_per_trip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+                                        bike_assignments: allScopedAssignments
+                                    };
+                                    
+                                    drawBatteryRoute(
+                                        scopedResult,
+                                        allScopedBikes.length,
+                                        { 
+                                            silentToast: true, 
+                                            tableBikes: allScopedBikes,
+                                            updateGlobalState: true
+                                        }
+                                    );
+                                    
+                                    // 确保电池状态面板更新
+                                    updateBatteryResultPanel({
+                                        lowCount: allScopedBikes.length,
+                                        vehicleCount: myRoutes.length,
+                                        routeCount: myRoutes.length,
+                                        capacityPerTrip: scopedResult.capacity_per_trip,
+                                        routes: myRoutes
+                                    });
+                                    
+                                    // 确保提示信息更新
+                                    setBatteryRouteDetailHint(`已分配 ${myRoutes.length} 条路线`);
+                                    
+                                    showToast(`已显示 ${allScopedBikes.length} 辆低电量车辆和 ${myRoutes.length} 条路线`);
+                                } catch (error) {
+                                    console.error('加载低电量车辆数据失败:', error);
+                                    // 即使低电量车辆数据获取失败，也要显示路线
+                                    
+                                    // 构建完整的scopedResult对象，确保包含所有必要的信息
+                                    const allScopedBikes = [];
+                                    const allScopedAssignments = {};
+                                    myRoutes.forEach(matchedRoute => {
+                                        const scopedAssignments = buildScopedAssignmentsForRoute(matchedRoute, batteryLastRouteResult?.bike_assignments || {});
+                                        const scopedBikes = getDispatcherScopedBikes(matchedRoute, scopedAssignments);
+                                        allScopedBikes.push(...scopedBikes);
+                                        Object.assign(allScopedAssignments, scopedAssignments);
+                                    });
+                                    
+                                    const scopedResult = {
+                                        routes: myRoutes,
+                                        vehicle_count: myRoutes.length,
+                                        route_count: myRoutes.length,
+                                        bike_count: allScopedBikes.length,
+                                        capacity_per_trip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+                                        bike_assignments: allScopedAssignments
+                                    };
+                                    
+                                    drawBatteryRoute(
+                                        scopedResult,
+                                        allScopedBikes.length,
+                                        { 
+                                            silentToast: true, 
+                                            tableBikes: allScopedBikes,
+                                            updateGlobalState: true
+                                        }
+                                    );
+                                    
+                                    // 确保电池状态面板更新
+                                    updateBatteryResultPanel({
+                                        lowCount: allScopedBikes.length,
+                                        vehicleCount: myRoutes.length,
+                                        routeCount: myRoutes.length,
+                                        capacityPerTrip: scopedResult.capacity_per_trip,
+                                        routes: myRoutes
+                                    });
+                                    
+                                    setBatteryRouteDetailHint(`已分配 ${myRoutes.length} 条路线`);
+                                    
+                                    showToast(`已显示 ${myRoutes.length} 条路线，但无法加载低电量车辆数据`);
+                                }
+                            }, 500);
+                        } else {
+                            setBatteryRouteDetailHint('当前未分配路线！');
+                        }
+                    } else {
+                        setBatteryRouteDetailHint('当前未分配路线！');
+                    }
+                } else {
+                    setBatteryRouteDetailHint('当前未分配路线！');
+                }
+            }
+        }, 500);
 
 
     } else {
@@ -7027,78 +8345,86 @@ function handleLogin() {
 
 
 
+// 初始化用户存储
+function initUserStorage() {
+    // 从localStorage获取现有用户
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+
+    // 确保至少有10个调度员
+    if (users.filter(u => u.role === 'dispatcher').length < 10) {
+        const defaultDispatchers = [
+            { username: '调度员1', password: '123456', role: 'dispatcher' },
+            { username: '调度员2', password: '123456', role: 'dispatcher' },
+            { username: '调度员3', password: '123456', role: 'dispatcher' },
+            { username: '调度员4', password: '123456', role: 'dispatcher' },
+            { username: '调度员5', password: '123456', role: 'dispatcher' },
+            { username: '调度员6', password: '123456', role: 'dispatcher' },
+            { username: '调度员7', password: '123456', role: 'dispatcher' },
+            { username: '调度员8', password: '123456', role: 'dispatcher' },
+            { username: '调度员9', password: '123456', role: 'dispatcher' },
+            { username: '调度员10', password: '123456', role: 'dispatcher' }
+        ];
+        defaultDispatchers.forEach(dispatcher => {
+            if (!users.some(user => user.username === dispatcher.username)) {
+                users.push(dispatcher);
+            }
+        });
+        // 保存到localStorage
+        localStorage.setItem('users', JSON.stringify(users));
+    }
+}
+
+// 检查用户名是否已存在
+function isUsernameExists(username) {
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+    return users.some(user => user.username === username);
+}
+
+// 添加用户
+function addUser(username, password, role) {
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+    users.push({ username, password, role });
+    localStorage.setItem('users', JSON.stringify(users));
+}
+
+// 获取用户
+function getUser(username) {
+    const storedUsers = localStorage.getItem('users');
+    const users = storedUsers ? JSON.parse(storedUsers) : [];
+    return users.find(user => user.username === username);
+}
+
 function handleRegister() {
 
-
-
     const username = document.getElementById('regUsername').value;
-
-
-
     const password = document.getElementById('regPassword').value;
-
-
-
     const password2 = document.getElementById('regPassword2').value;
-
-
-
-    
-
-
+    const role = document.getElementById('regRole').value;
 
     if (!username || !password) {
-
-
-
-        alert('请输入用户名和密常');
-
-
-
+        alert('请输入用户名和密码');
         return;
-
-
-
     }
-
-
-
-    
-
-
 
     if (password !== password2) {
-
-
-
         alert('两次输入的密码不一致');
-
-
-
         return;
-
-
-
     }
 
+    // 检查用户名是否已存在
+    if (isUsernameExists(username)) {
+        alert('用户名已存在，请选择其他用户名');
+        return;
+    }
 
+    // 添加用户
+    addUser(username, password, role);
 
-    
-
-
-
-    // 简单的注册逻编辑
-
-
-
-    alert('注册成功，请使用新账号登常');
-
-
-
+    alert('注册成功，请使用新账号登录');
     toggleAuthForm('login');
-
-
-
 }
 
 
@@ -7110,20 +8436,299 @@ function handleRegister() {
 // 处理退出登常
 
 
+
 function handleLogout() {
 
+    // 重置AI面板状态
     resetAIPanelStateForNewLogin();
+    
+    // 重置系统状态
+    selectedScheme = 'auto';
+    currentDispatchScheme = '待选择';
+    latestSmartLocationResult = null;
+    latestDispatchResult = null;
+    savedPredictionData = null;
+    initialPredictionData = null;
+    initialUsageData = null;
+    isResetting = false;
+    chartsInitialized = false;
+    currentPOIData = null;
+    currentPoiSource = 'mock';
+    dispatchFeatures = [];
+    manualLocationMetrics = null;
+    smartMetrics = { coverage: 0, avg_distance: 0, balance: 0, capacity: 0 };
+    activeDispatchRouteIndex = null;
+    window.currentParkingData = [];
+    
+    // 清除地图上的标记和图层
+    clearSmartLocations(true);
+    clearManualLocations(true);
+    clearDispatch(true);
+    clearEbikeSimulation(true);
+    
+    // 清除电池运维相关状态
+    clearBatteryRouteLines();
+    clearLowBatteryMarkers();
+    batteryRouteAssignments = {};
+    batteryLastRouteResult = null;
+    currentLowBatteryList = [];
+    dispatcherSelectedVehicleKey = '';
+    
+    // 清除热力图
+    if (map && heatmapLayer) {
+        try {
+            map.removeOverlay(heatmapLayer);
+        } catch (_) {
+            // ignore
+        }
+    }
+    heatmapLayer = null;
+    
+    if (map) {
+        heatmapMarkers.forEach(marker => {
+            try {
+                map.removeOverlay(marker);
+            } catch (_) {
+                // ignore
+            }
+        });
+    }
+    heatmapMarkers = [];
+    
+    // 清除信息窗口
+    if (window.currentInfoWindow && map) {
+        try {
+            map.closeInfoWindow(window.currentInfoWindow);
+        } catch (_) {
+            // ignore
+        }
+        window.currentInfoWindow = null;
+    }
+    
+    // 重置表格内容
+    const supplyBody = document.getElementById('supply-demand-body');
+    if (supplyBody) {
+        supplyBody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+    }
+    
+    const dispatchBody = document.getElementById('dispatch-table-body');
+    if (dispatchBody) {
+        dispatchBody.innerHTML = '<tr><td colspan="7" style="color:#999;padding:10px;text-align:center;">请运行调度优化</td></tr>';
+    }
+    
+    const batteryBody = document.getElementById('battery-table-body');
+    if (batteryBody) {
+        batteryBody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
+    }
+    
+    // 重置指标显示
+    const metricCoverage = document.getElementById('metric-coverage');
+    const metricDistance = document.getElementById('metric-distance');
+    const metricBalance = document.getElementById('metric-balance');
+    const metricCapacity = document.getElementById('metric-capacity');
+    if (metricCoverage) metricCoverage.textContent = '0%';
+    if (metricDistance) metricDistance.textContent = '0m';
+    if (metricBalance) metricBalance.textContent = '0';
+    if (metricCapacity) metricCapacity.textContent = '0';
+    
+    // 重置图表
+    if (comparisonChart && typeof comparisonChart.destroy === 'function') {
+        comparisonChart.destroy();
+        comparisonChart = null;
+    }
+    if (usageChart && typeof usageChart.destroy === 'function') {
+        usageChart.destroy();
+        usageChart = null;
+    }
+    if (predictionChart && typeof predictionChart.destroy === 'function') {
+        predictionChart.destroy();
+        predictionChart = null;
+    }
+    chartsInitialized = false;
+    
+    // 重置预测数据
+    [
+        'prediction-morning-main',
+        'prediction-morning-aux',
+        'prediction-noon-main',
+        'prediction-noon-aux',
+        'prediction-evening-main',
+        'prediction-evening-aux'
+    ].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = '-';
+        }
+    });
+    
+    // 重置状态显示
+    const statusSmart = document.getElementById('status-smart');
+    const statusManual = document.getElementById('status-manual');
+    const statusDispatch = document.getElementById('status-dispatch');
+    if (statusSmart) statusSmart.textContent = '0';
+    if (statusManual) statusManual.textContent = '0';
+    if (statusDispatch) statusDispatch.textContent = '0';
+    
+    // 重置下拉菜单
+    const dispatchTime = document.getElementById('dispatch-time');
+    if (dispatchTime) {
+        dispatchTime.value = 'morning';
+    }
+    
+    // 重置供需表格标签
+    const supplyTabContainer = document.querySelector('#supply-demand-table')?.closest('.data-card');
+    const supplyTabs = supplyTabContainer ? supplyTabContainer.querySelectorAll('.tabs .tab') : [];
+    supplyTabs.forEach(tab => {
+        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+        tab.classList.toggle('active', tabTime === 'morning');
+    });
+    
+    // 更新方案状态显示
+    updateSchemeStatusDisplay();
 
-
-
+    // 切换到登录页面
     document.getElementById('systemPage').style.display = 'none';
-
-
-
     document.getElementById('loginPage').style.display = 'flex';
 
+}
 
+function resetOperationalStateForAdminLogin() {
+    selectedScheme = 'auto';
+    currentDispatchScheme = '待选择';
+    latestSmartLocationResult = null;
+    latestDispatchResult = null;
+    savedPredictionData = null;
+    initialPredictionData = null;
+    initialUsageData = null;
+    isResetting = false;
+    chartsInitialized = false;
+    currentPOIData = null;
+    currentPoiSource = 'mock';
+    dispatchFeatures = [];
+    manualLocationMetrics = null;
+    smartMetrics = { coverage: 0, avg_distance: 0, balance: 0, capacity: 0 };
+    activeDispatchRouteIndex = null;
+    window.currentParkingData = [];
 
+    clearSmartLocations(true);
+    clearManualLocations(true);
+    clearDispatch(true);
+    clearEbikeSimulation(true);
+
+    clearBatteryRouteLines();
+    clearLowBatteryMarkers();
+    batteryRouteAssignments = {};
+    batteryLastRouteResult = null;
+    currentLowBatteryList = [];
+    dispatcherSelectedVehicleKey = '';
+
+    if (map && heatmapLayer) {
+        try {
+            map.removeOverlay(heatmapLayer);
+        } catch (_) {
+            // ignore
+        }
+    }
+    heatmapLayer = null;
+
+    if (map) {
+        heatmapMarkers.forEach(marker => {
+            try {
+                map.removeOverlay(marker);
+            } catch (_) {
+                // ignore
+            }
+        });
+    }
+    heatmapMarkers = [];
+
+    if (window.currentInfoWindow && map) {
+        try {
+            map.closeInfoWindow(window.currentInfoWindow);
+        } catch (_) {
+            // ignore
+        }
+        window.currentInfoWindow = null;
+    }
+
+    const supplyBody = document.getElementById('supply-demand-body');
+    if (supplyBody) {
+        supplyBody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请先运行选址算法</td></tr>';
+    }
+
+    const dispatchBody = document.getElementById('dispatch-table-body');
+    if (dispatchBody) {
+        dispatchBody.innerHTML = '<tr><td colspan="7" style="color:#999;padding:10px;text-align:center;">请运行调度优化</td></tr>';
+    }
+
+    const batteryBody = document.getElementById('battery-table-body');
+    if (batteryBody) {
+        batteryBody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
+    }
+
+    const metricCoverage = document.getElementById('metric-coverage');
+    const metricDistance = document.getElementById('metric-distance');
+    const metricBalance = document.getElementById('metric-balance');
+    const metricCapacity = document.getElementById('metric-capacity');
+    if (metricCoverage) metricCoverage.textContent = '0%';
+    if (metricDistance) metricDistance.textContent = '0m';
+    if (metricBalance) metricBalance.textContent = '0';
+    if (metricCapacity) metricCapacity.textContent = '0';
+
+    if (comparisonChart && typeof comparisonChart.destroy === 'function') {
+        comparisonChart.destroy();
+        comparisonChart = null;
+    }
+    if (usageChart && typeof usageChart.destroy === 'function') {
+        usageChart.destroy();
+        usageChart = null;
+    }
+    if (predictionChart && typeof predictionChart.destroy === 'function') {
+        predictionChart.destroy();
+        predictionChart = null;
+    }
+    chartsInitialized = false;
+
+    const comparisonPlaceholder = document.getElementById('comparison-placeholder');
+    if (comparisonPlaceholder) {
+        comparisonPlaceholder.removeAttribute('style');
+        comparisonPlaceholder.textContent = '点击"智能 vs 人工 对比"按钮查看';
+    }
+
+    [
+        'prediction-morning-main',
+        'prediction-morning-aux',
+        'prediction-noon-main',
+        'prediction-noon-aux',
+        'prediction-evening-main',
+        'prediction-evening-aux'
+    ].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.textContent = '-';
+        }
+    });
+
+    const statusSmart = document.getElementById('status-smart');
+    const statusManual = document.getElementById('status-manual');
+    const statusDispatch = document.getElementById('status-dispatch');
+    if (statusSmart) statusSmart.textContent = '0';
+    if (statusManual) statusManual.textContent = '0';
+    if (statusDispatch) statusDispatch.textContent = '0';
+
+    const dispatchTime = document.getElementById('dispatch-time');
+    if (dispatchTime) {
+        dispatchTime.value = 'morning';
+    }
+
+    const supplyTabContainer = document.querySelector('#supply-demand-table')?.closest('.data-card');
+    const supplyTabs = supplyTabContainer ? supplyTabContainer.querySelectorAll('.tabs .tab') : [];
+    supplyTabs.forEach(tab => {
+        const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+        tab.classList.toggle('active', tabTime === 'morning');
+    });
+
+    updateSchemeStatusDisplay();
 }
 
 
@@ -7158,59 +8763,8 @@ let heatmapMarkers = [];
 
 
 function updateHeatmap() {
-
-
-
-function renderHeatmap(points) {
-    const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
-    const maxCount = Math.max(100, points.reduce((max, p) => Math.max(max, p.count), 1));
-
-    if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
-        if (!heatmapLayer) {
-            heatmapLayer = new BMapLib.HeatmapOverlay({
-                radius: 25,
-                gradient: {
-                    0.4: 'blue',
-                    0.6: 'cyan',
-                    0.7: 'lime',
-                    0.8: 'yellow',
-                    1.0: 'red'
-                }
-            });
-            map.addOverlay(heatmapLayer);
-        }
-
-        heatmapLayer.setDataSet({ data: points, max: maxCount });
-        if (showHeatmap) {
-            heatmapLayer.show();
-        } else {
-            heatmapLayer.hide();
-        }
-        return;
-    }
-
-    points.forEach(p => {
-        const markerPoint = new BMap.Point(p.lng, p.lat);
-        const normalized = Math.max(0, Math.min(1, p.count / maxCount));
-        const size = 6 + normalized * 16;
-
-        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
-            scale: size / 10,
-            strokeWeight: 0,
-            fillColor: getHeatmapColor(normalized),
-            fillOpacity: 0.55
-        });
-
-        const marker = new BMap.Marker(markerPoint, { icon });
-        marker.setVisible(showHeatmap);
-        map.addOverlay(marker);
-        heatmapMarkers.push(marker);
-    });
-}
-
-
     if (!map) {
-        showToast('地图尚未初始化');
+        showToast('地图远未初姻化');
         return;
     }
 
@@ -7223,6 +8777,7 @@ function renderHeatmap(points) {
     }
 
     const timeSlot = document.getElementById('heatmap-time')?.value || 'morning';
+    console.log('Selected time slot:', timeSlot);
 
     showProgress('正在生成热力图...');
     setTimeout(() => {
@@ -7249,6 +8804,25 @@ function renderHeatmap(points) {
 
             renderHeatmap(points);
             showToast('热力图更新完成');
+
+            // 为不同时段使用固定的总需求值
+            let totalDemandFromHeatmap = 0;
+            switch(timeSlot) {
+                case 'morning':
+                    totalDemandFromHeatmap = 175; // 固定值
+                    break;
+                case 'noon':
+                    totalDemandFromHeatmap = 160; // 固定值
+                    break;
+                case 'evening':
+                    totalDemandFromHeatmap = 185; // 固定值
+                    break;
+                default:
+                    totalDemandFromHeatmap = 175;
+            }
+            console.log('Heatmap update for timeSlot:', timeSlot, 'points count:', points.length, 'totalDemandFromHeatmap:', totalDemandFromHeatmap);
+            console.log('MOCK_HEATMAP_DATA[timeSlot]:', MOCK_HEATMAP_DATA[timeSlot]);
+            updateSystemStatus(null, totalDemandFromHeatmap);
         } catch (error) {
             console.error('更新热力图失败:', error);
             showToast('热力图渲染失败，请重试');
@@ -7256,77 +8830,61 @@ function renderHeatmap(points) {
             hideProgress();
         }
     }, 800);
-    return;
-
-    fetch(`/api/heatmap-data?time=${timeSlot}`)
-        .then(response => response.json())
-        .then(data => {
-            const rawHeatmapData = (data && data.points && data.points.length > 0)
-                ? data.points
-                : (MOCK_HEATMAP_DATA[timeSlot] || []);
-
-            const points = normalizeHeatmapData(rawHeatmapData);
-            if (points.length === 0) {
-                showToast('当前时段暂无热力图数据');
-                return;
-            }
-
-            const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
-            const maxCount = points.reduce((max, p) => Math.max(max, p.count), 1);
-
-            if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
-                heatmapLayer = new BMapLib.HeatmapOverlay({
-                    radius: 28,
-                    gradient: {
-                        0.2: '#2d7cff',
-                        0.45: '#00c2ff',
-                        0.65: '#39d98a',
-                        0.8: '#ffd166',
-                        1.0: '#ff5a5f'
-                    }
-                });
-
-                map.addOverlay(heatmapLayer);
-                heatmapLayer.setDataSet({ data: points, max: maxCount });
-
-                if (showHeatmap) {
-                    heatmapLayer.show();
-                } else {
-                    heatmapLayer.hide();
-                }
-
-                return;
-            }
-
-            points.forEach(p => {
-                const markerPoint = new BMap.Point(p.lng, p.lat);
-                const normalized = Math.max(0, Math.min(1, p.count / maxCount));
-                const size = 6 + normalized * 16;
-
-                const icon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
-                    scale: size / 10,
-                    strokeWeight: 0,
-                    fillColor: getHeatmapColor(normalized),
-                    fillOpacity: 0.55
-                });
-
-                const marker = new BMap.Marker(markerPoint, { icon });
-                marker.setVisible(showHeatmap);
-                map.addOverlay(marker);
-                heatmapMarkers.push(marker);
-            });
-        })
-        .catch(error => {
-            console.error('加载热力图数据失败', error);
-            showToast('热力图数据加载失败');
-        });
-
-
-
 }
 
+function renderHeatmap(points) {
+    const showHeatmap = document.getElementById('layer-heatmap')?.checked || false;
+    const maxCount = Math.max(100, points.reduce((max, p) => Math.max(max, p.count), 1));
 
+    if (window.BMapLib && window.BMapLib.HeatmapOverlay) {
+        if (!heatmapLayer) {
+            heatmapLayer = new BMapLib.HeatmapOverlay({
+                radius: 25,
+                gradient: {
+                    0.4: 'blue',
+                    0.6: 'cyan',
+                    0.7: 'lime',
+                    0.8: 'yellow',
+                    1.0: 'red'
+                },
+                enableClicking: false // 禁止点击，让点击事件传递到下面的调度路径
+            });
+            map.addOverlay(heatmapLayer);
+            // 设置热力图的zIndex，确保在调度路径之下
+            if (heatmapLayer.setZIndex) {
+                heatmapLayer.setZIndex(9900);
+            }
+        }
 
+        heatmapLayer.setDataSet({ data: points, max: maxCount });
+        if (showHeatmap) {
+            heatmapLayer.show();
+        } else {
+            heatmapLayer.hide();
+        }
+        return;
+    }
+
+    points.forEach(p => {
+        const markerPoint = new BMap.Point(p.lng, p.lat);
+        const normalized = Math.max(0, Math.min(1, p.count / maxCount));
+        const size = 6 + normalized * 16;
+
+        const icon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+            scale: size / 10,
+            strokeWeight: 0,
+            fillColor: getHeatmapColor(normalized),
+            fillOpacity: 0.55
+        });
+
+        const marker = new BMap.Marker(markerPoint, { icon });
+        marker.setVisible(showHeatmap);
+        // 设置模拟热力图标记的zIndex，确保在调度路径之下
+        marker.setZIndex(9900);
+        map.addOverlay(marker);
+        heatmapMarkers.push(marker);
+    });
+}
 
 function normalizeHeatmapData(rawHeatmapData) {
     const result = [];
@@ -7417,55 +8975,149 @@ function getHeatmapColor(intensity) {
 
 
 function loadSystemData() {
+    const isAdmin = currentUserRole === 'admin';
 
 
-
-    // 模拟加载系统数据
-
+    // 从实际数据中加载系统数据
 
 
     setTimeout(() => {
 
 
-
-        // 更新系统状常
-
-
-        document.getElementById('total-bikes').textContent = '200';
-
-
-
-        document.getElementById('available-bikes').textContent = '150';
-
-
-
-        document.getElementById('low-battery-bikes').textContent = '25';
-
-
-
-        document.getElementById('total-demand').textContent = '85';
-
-
-
+        // 从电池运维数据中获取低电量车辆数
+        let lowBatteryCount = currentLowBatteryList.length || 0;
         
+        // 对于调度员，检查是否有分配的换电路线
+        if (currentUserRole === 'dispatcher') {
+            const myBatteryRoutes = getDispatcherBatteryRoutes();
+            if (myBatteryRoutes.length > 0) {
+                // 计算分配路线中的低电量车辆总数
+                let assignedLowBatteryCount = 0;
+                myBatteryRoutes.forEach(route => {
+                    assignedLowBatteryCount += route.service_count || 0;
+                });
+                lowBatteryCount = assignedLowBatteryCount;
+            } else {
+                // 没有分配路线时不显示
+                lowBatteryCount = 0;
+            }
+        }
 
 
+        // 初始状态下总需求显示"-"
+        let totalDemand = 0;
+        let totalBikes = 200; // 默认总车辆数
+        let availableBikes = 150; // 默认可用车辆数
+
+        // 根据低电量车辆数调整可用车辆数
+        availableBikes = Math.max(0, totalBikes - lowBatteryCount);
+
+        // 不在初始化时调用updateSystemStatus，避免覆盖热力图数据
+        // 只需要直接更新DOM元素
+        document.getElementById('total-bikes').textContent = totalBikes;
+        document.getElementById('available-bikes').textContent = availableBikes;
+        // 管理员或有分配路线的调度员显示低电量车辆数
+        if (isAdmin || (currentUserRole === 'dispatcher' && lowBatteryCount > 0)) {
+            document.getElementById('low-battery-bikes').textContent = lowBatteryCount > 0 ? Math.min(lowBatteryCount, 100) : '-';
+        } else if (currentUserRole === 'dispatcher') {
+            // 没有分配路线的调度员不显示
+            document.getElementById('low-battery-bikes').textContent = '-';
+        }
+        document.getElementById('total-demand').textContent = '-'
+
+        initCharts();
 
         // 初始化热力图
-
-
-
         // 暂时不自动初始化热力图，让用户点击更新热力图按钮来显示
-
-
         // updateHeatmap();
-
-
 
     }, 500);
 
+}
 
+let lastHeatmapTotalDemand = null;
 
+// 更新系统状态显示
+function updateSystemStatus(lowBatteryCountOverride, totalDemandOverride) {
+    const isAdmin = currentUserRole === 'admin';
+    // 如果传入了热力图总需求，记录它
+    if (totalDemandOverride !== null && totalDemandOverride !== undefined) {
+        lastHeatmapTotalDemand = Math.min(totalDemandOverride, 200);
+    }
+    
+    // 从电池运维数据中获取低电量车辆数
+    let lowBatteryCount = currentLowBatteryList.length || 0;
+    if (lowBatteryCountOverride !== null && lowBatteryCountOverride !== undefined) {
+        lowBatteryCount = lowBatteryCountOverride;
+    }
+    
+    // 对于调度员，检查是否有分配的换电路线
+    if (currentUserRole === 'dispatcher') {
+        const myBatteryRoutes = getDispatcherBatteryRoutes();
+        if (myBatteryRoutes.length > 0) {
+            // 计算分配路线中的低电量车辆总数
+            let assignedLowBatteryCount = 0;
+            myBatteryRoutes.forEach(route => {
+                assignedLowBatteryCount += route.service_count || 0;
+            });
+            lowBatteryCount = assignedLowBatteryCount;
+        } else {
+            // 没有分配路线时不显示
+            lowBatteryCount = 0;
+        }
+    }
+    
+    // 限制低电量车辆数，避免异常值
+    lowBatteryCount = Math.min(lowBatteryCount, 100);
+    // 确保低电量车辆数不为负数
+    lowBatteryCount = Math.max(0, lowBatteryCount);
+    console.log('updateSystemStatus called - lowBatteryCountOverride:', lowBatteryCountOverride, 'currentLowBatteryList.length:', currentLowBatteryList.length, 'lowBatteryCount after limit:', lowBatteryCount, 'totalDemandOverride:', totalDemandOverride);
+
+    // 从停车点数据中获取总电动车数和总需求
+    let totalBikes = 0;
+    let totalDemand = 0;
+
+    // 如果有从热力图传入的总需求，使用传入的值
+    if (totalDemandOverride !== null && totalDemandOverride !== undefined) {
+        totalDemand = totalDemandOverride;
+        // 限制总需求，避免异常值
+        totalDemand = Math.min(totalDemand, 200);
+        console.log('Using heatmap totalDemand:', totalDemand);
+    } else if (lastHeatmapTotalDemand !== null) {
+        // 如果之前有热力图数据，保留它
+        totalDemand = lastHeatmapTotalDemand;
+        console.log('Keeping existing heatmap totalDemand:', totalDemand);
+    } else if (window.currentParkingData && window.currentParkingData.length > 0) {
+        // 否则使用停车点数据中的需求
+        window.currentParkingData.forEach(parking => {
+            totalBikes += parking.current || 0;
+            totalDemand += parking.demand || 0;
+        });
+    } else {
+        // 如果都没有，使用默认值
+        totalBikes = 200;
+        totalDemand = 0;
+    }
+
+    // 确保总车辆数不为0
+    totalBikes = Math.max(totalBikes, 100);
+    
+    // 计算可用车辆：总车辆数 - 低电量车辆数
+    const availableBikes = Math.max(0, totalBikes - lowBatteryCount);
+
+    console.log('Updating DOM - totalBikes:', totalBikes, 'availableBikes:', availableBikes, 'lowBatteryCount:', lowBatteryCount, 'totalDemand:', totalDemand);
+    
+    // 更新系统状态
+    document.getElementById('total-bikes').textContent = totalBikes;
+    document.getElementById('available-bikes').textContent = availableBikes;
+    // 管理员或有分配路线的调度员显示低电量车辆数
+    if (isAdmin || (currentUserRole === 'dispatcher' && lowBatteryCount > 0)) {
+        document.getElementById('low-battery-bikes').textContent = lowBatteryCount > 0 ? lowBatteryCount : '-';
+    } else if (currentUserRole === 'dispatcher') {
+        // 没有分配路线的调度员不显示
+        document.getElementById('low-battery-bikes').textContent = '-';
+    }
+    document.getElementById('total-demand').textContent = totalDemand > 0 ? totalDemand : '-';
 }
 
 
@@ -7574,14 +9226,17 @@ function initMenuSwitch() {
             if (currentModule) {
 
 
-
                 currentModule.style.display = 'block';
 
                 updateBatteryOperationButtons();
                 if (moduleId === 'battery-module') {
                     hydrateBatteryOpsView();
                 }
-
+                if (moduleId === 'feedback-module') {
+                    syncFeedbackRoleView();
+                    refreshFeedbackList(true);
+                }
+                updateRightPanelForRole(this.getAttribute('data-module'));
 
 
             }
@@ -7599,21 +9254,174 @@ function initMenuSwitch() {
 }
 
 function applyRolePermissions() {
-    const batteryMenu = document.getElementById('battery-menu-item');
-    const roleTip = document.getElementById('battery-role-tip');
+    const menuItems = document.querySelectorAll('.menu-item');
     const isAdmin = currentUserRole === 'admin';
 
-    if (batteryMenu) {
-        batteryMenu.style.display = '';
-        batteryMenu.dataset.hiddenForRole = '0';
+    // 为调度员限制菜单访问权限
+    menuItems.forEach(item => {
+        const module = item.getAttribute('data-module');
+        // 调度员只能访问：
+        // - 系统概览（有限访问）
+        // - 动态调度（仅查看任务）
+        // - 电池运维（仅查看负责路线）
+        // - 意见反馈（仅提交反馈）
+        const allowedModules = ['dashboard', 'dispatch', 'battery', 'feedback'];
+        
+        if (!isAdmin && !allowedModules.includes(module)) {
+            item.style.display = 'none';
+            item.dataset.hiddenForRole = '1';
+        } else {
+            item.style.display = '';
+            item.dataset.hiddenForRole = '0';
+        }
+    });
+
+    // 为调度员限制系统概览模块的功能
+    const panelSections = document.querySelectorAll('.panel-section');
+    panelSections.forEach(section => {
+        const sectionTitle = section.querySelector('.section-title');
+        if (sectionTitle && sectionTitle.textContent.includes('方案导出')) {
+            section.style.display = isAdmin ? '' : 'none';
+        }
+    });
+
+    // 为调度员处理图层控制
+    const layerControls = document.querySelectorAll('.checkbox-group input[type="checkbox"]');
+    const checkboxItems = document.querySelectorAll('.checkbox-group .checkbox-item');
+    
+    // 图层控制配置
+    const layersToRemoveForDispatcher = ['layer-smart-parking', 'layer-manual-parking', 'layer-smart-coverage', 'layer-manual-coverage'];
+    const layersControllableByDispatcher = ['layer-heatmap', 'layer-boundary', 'layer-dispatch', 'layer-low-battery', 'layer-battery-route'];
+    
+    // 遍历所有图层控制
+    for (let i = 0; i < layerControls.length; i++) {
+        const control = layerControls[i];
+        const checkboxItem = checkboxItems[i];
+        const id = control.id;
+        
+        if (!isAdmin) {
+            // 对于调度员
+            if (layersToRemoveForDispatcher.includes(id)) {
+                // 移除不需要的图层控制
+                if (checkboxItem) {
+                    checkboxItem.style.display = 'none';
+                }
+            } else if (layersControllableByDispatcher.includes(id)) {
+                // 调度员可以控制的图层
+                control.disabled = false;
+            }
+        } else {
+            // 对于管理员
+            // 显示所有图层控制
+            if (checkboxItem) {
+                checkboxItem.style.display = '';
+            }
+            // 管理员可以控制所有图层
+            control.disabled = false;
+        }
+    }
+    
+    // 为调度员设置默认图层显示状态
+    if (!isAdmin) {
+        // 调度员默认显示的图层
+        const defaultVisibleLayers = ['layer-heatmap', 'layer-boundary', 'layer-dispatch', 'layer-low-battery', 'layer-battery-route'];
+        layerControls.forEach(control => {
+            const id = control.id;
+            if (defaultVisibleLayers.includes(id)) {
+                control.checked = true;
+            } else {
+                control.checked = false;
+            }
+        });
+        // 清除调度员在localStorage中的图层状态，使用默认值
+        localStorage.removeItem('dispatcherLayers');
+        
+        // 控制图例显示，只显示调度员可控制的图层对应的图例
+        const legendsToHideForDispatcher = ['legend-smart-parking', 'legend-manual-parking', 'legend-smart-coverage', 'legend-manual-coverage', 'legend-heatmap', 'legend-ebike', 'legend-ebike-status'];
+        legendsToHideForDispatcher.forEach(legendId => {
+            const legendItem = document.getElementById(legendId);
+            if (legendItem) {
+                legendItem.style.display = 'none';
+            }
+        });
+        
+        // 应用默认图层设置
+        if (typeof updateLayerVisibility === 'function') {
+            updateLayerVisibility();
+        }
+    } else {
+        // 管理员默认显示的图层
+        const defaultVisibleLayers = ['layer-smart-parking', 'layer-manual-parking', 'layer-smart-coverage', 'layer-manual-coverage', 'layer-heatmap', 'layer-boundary', 'layer-dispatch', 'layer-low-battery', 'layer-battery-route'];
+        layerControls.forEach(control => {
+            const id = control.id;
+            if (defaultVisibleLayers.includes(id)) {
+                control.checked = true;
+            } else {
+                control.checked = false;
+            }
+        });
+        // 清除管理员在localStorage中的图层状态，使用默认值
+        localStorage.removeItem('adminLayers');
+        
+        // 管理员显示图例，但不包括需求热力图
+        const legendsToShowForAdmin = ['legend-smart-parking', 'legend-manual-parking', 'legend-smart-coverage', 'legend-manual-coverage'];
+        legendsToShowForAdmin.forEach(legendId => {
+            const legendItem = document.getElementById(legendId);
+            if (legendItem) {
+                legendItem.style.display = '';
+            }
+        });
+        // 隐藏需求热力图图例
+        const heatmapLegend = document.getElementById('legend-heatmap');
+        if (heatmapLegend) {
+            heatmapLegend.style.display = 'none';
+        }
     }
 
+    const roleTip = document.getElementById('battery-role-tip');
     if (roleTip) {
         roleTip.style.display = isAdmin ? 'none' : 'block';
     }
 
+    const dispatchRoleTip = document.getElementById('dispatch-role-tip');
+    if (dispatchRoleTip) {
+        dispatchRoleTip.style.display = isAdmin ? 'none' : 'block';
+    }
+
+    const dispatchRouteCountRow = document.getElementById('dispatch-route-count-row');
+    if (dispatchRouteCountRow) {
+        dispatchRouteCountRow.style.display = isAdmin ? 'none' : '';
+    }
+
+    const dispatchRouteDetail = document.getElementById('dispatch-route-detail');
+    if (dispatchRouteDetail) {
+        dispatchRouteDetail.style.display = isAdmin ? 'none' : '';
+    }
+
+    // 为调度员限制动态调度模块的功能
+    const runDispatchBtn = document.getElementById('run-dispatch-btn');
+    const dispatchAssignmentBtn = document.getElementById('dispatch-assignment-btn');
+    if (runDispatchBtn) {
+        runDispatchBtn.style.display = isAdmin ? '' : 'none';
+    }
+    if (dispatchAssignmentBtn) {
+        dispatchAssignmentBtn.style.display = isAdmin ? '' : 'none';
+    }
+
     updateBatteryOperationButtons();
+    updateDispatchOperationButtons();
     updateAIRoleView();
+    updateAIPanelFocus();
+    updateRightPanelForRole();
+    syncFeedbackRoleView();
+
+    // 调度员登录后默认显示动态调度模块（任务看板）
+    if (!isAdmin) {
+        const dispatchMenuItem = document.querySelector('[data-module="dispatch"]');
+        if (dispatchMenuItem) {
+            dispatchMenuItem.click();
+        }
+    }
 }
 
 
@@ -7674,7 +9482,7 @@ function drawCampusBoundary() {
 
 
 
-    fetch('data_bd09/WHUInfo_Area.geojson')
+    fetch('data/WHUInfo_Area.geojson')
 
 
 
@@ -7947,7 +9755,7 @@ function loadMapData() {
 
 
 
-    fetch('data_bd09/WHUInfo_Roads.geojson')
+    fetch('data/WHUInfo_Roads_Filtered.geojson')
 
 
 
@@ -8074,33 +9882,30 @@ function initLayerControl() {
 
 
     // 为其他图层添加事件监听器
-
-
-
     const layerCheckboxes = document.querySelectorAll('input[type="checkbox"][id^="layer-"]');
-
-
-
     layerCheckboxes.forEach(checkbox => {
-
-
-
-        checkbox.addEventListener('change', function() {
-
-
-
+        checkbox.addEventListener('change', function () {
             updateLayerVisibility();
-
-
-
         });
-
-
-
     });
 
+    const dispatchTimeSelect = document.getElementById('dispatch-time');
+    if (dispatchTimeSelect) {
+        dispatchTimeSelect.addEventListener('change', function () {
+            generateSupplyDemandTable(this.value, selectedScheme);
+            const tabs = document.querySelectorAll('.tabs .tab');
+            tabs.forEach(tab => {
+                const tabTime = tab.getAttribute('onclick')?.match(/'([^']+)'/)?.[1];
+                if (tabTime === this.value) {
+                    tab.classList.add('active');
+                } else {
+                    tab.classList.remove('active');
+                }
+            });
+        });
+    }
 
-
+    updateLayerVisibility();
 }
 
 
@@ -8110,6 +9915,22 @@ function initLayerControl() {
 
 
 // 更新图层可见性
+function setOverlayVisibility(overlay, visible) {
+    if (!overlay) {
+        return;
+    }
+    if (typeof overlay.setVisible === 'function') {
+        overlay.setVisible(!!visible);
+        return;
+    }
+    if (visible && typeof overlay.show === 'function') {
+        overlay.show();
+        return;
+    }
+    if (!visible && typeof overlay.hide === 'function') {
+        overlay.hide();
+    }
+}
 
 
 function updateLayerVisibility() {
@@ -8136,7 +9957,7 @@ function updateLayerVisibility() {
 
 
 
-        item.marker.setVisible(showSmartParking);
+        setOverlayVisibility(item.marker, showSmartParking);
 
 
 
@@ -8152,7 +9973,7 @@ function updateLayerVisibility() {
 
 
 
-        circle.setVisible(showSmartCoverage);
+        setOverlayVisibility(circle, showSmartCoverage);
 
 
 
@@ -8184,7 +10005,7 @@ function updateLayerVisibility() {
 
 
 
-        item.marker.setVisible(showManualParking);
+        setOverlayVisibility(item.marker, showManualParking);
 
 
 
@@ -8200,7 +10021,7 @@ function updateLayerVisibility() {
 
 
 
-        circle.setVisible(showManualCoverage);
+        setOverlayVisibility(circle, showManualCoverage);
 
 
 
@@ -8224,7 +10045,7 @@ function updateLayerVisibility() {
 
 
 
-        line.setVisible(showDispatch);
+        setOverlayVisibility(line, showDispatch);
 
 
 
@@ -8236,7 +10057,7 @@ function updateLayerVisibility() {
 
 
 
-        marker.setVisible(showDispatch);
+        setOverlayVisibility(marker, showDispatch);
 
 
 
@@ -8244,10 +10065,22 @@ function updateLayerVisibility() {
 
 
 
+    // 低电量车辆
+    const showLowBattery = document.getElementById('layer-low-battery')?.checked || false;
+    lowBatteryMarkers.forEach(marker => {
+        setOverlayVisibility(marker, showLowBattery);
+    });
+
+    // 换电路线（含校园中心补给点）
+    const showBatteryRoute = document.getElementById('layer-battery-route')?.checked || false;
+    batteryRouteLines.forEach(overlay => {
+        setOverlayVisibility(overlay, showBatteryRoute);
+    });
+
     // 需求热力图
 
 
-    const showHeatmap = document.getElementById('layer-heatmap')?.checked !== false;
+    const showHeatmap = document.getElementById('layer-heatmap')?.checked || false;
 
 
 
@@ -8283,7 +10116,7 @@ function updateLayerVisibility() {
 
 
 
-        marker.setVisible(!!showHeatmap);
+        setOverlayVisibility(marker, !!showHeatmap);
 
 
 
@@ -8307,19 +10140,17 @@ function updateLayerVisibility() {
 
 
 
+
+
         campusBoundaryLayer.forEach(layer => {
 
 
 
-            if (layer.setVisible) {
 
 
-
-                layer.setVisible(showBoundary);
-
+            setOverlayVisibility(layer, showBoundary);
 
 
-            }
 
 
 
@@ -8327,7 +10158,11 @@ function updateLayerVisibility() {
 
 
 
+
+
     }
+
+
 
 
 
@@ -8397,19 +10232,59 @@ function getMetricsPayloadForAI() {
 
 function extractDispatchRoutesForAI() {
     const features = Array.isArray(latestDispatchResult?.features) ? latestDispatchResult.features : [];
-    return features
-        .filter(f => f?.geometry?.type === 'LineString')
-        .map((feature, idx) => {
-            const props = feature.properties || {};
-            return {
-                name: props.route_name || `路线${idx + 1}`,
-                from: props.from || '供应点',
-                to: props.to || '需求点',
-                transfer: Number(props.amount || props.transfer || 0) || 0,
-                shortage: Number(props.shortage || 0) || 0,
-                distance_m: Number(props.total_distance_m || props.distance_m || props.distance || 0) || 0
-            };
-        });
+    let lineFeatures = features.filter(f => f?.geometry?.type === 'LineString');
+
+    if (currentUserRole === 'dispatcher') {
+        console.log('[DEBUG extractDispatchRoutesForAI] currentUserRole is dispatcher');
+        const dispatcherRoutes = getDispatcherRoutes();
+        console.log('[DEBUG extractDispatchRoutesForAI] dispatcherRoutes:', JSON.stringify(dispatcherRoutes));
+        
+        if (dispatcherRoutes.length > 0) {
+            // 直接使用dispatcherRoutes中的vehicle_id
+            const dispatcherVehicleIds = dispatcherRoutes.map(r => r.vehicle_id).filter(Boolean);
+            console.log('[DEBUG extractDispatchRoutesForAI] dispatcherVehicleIds:', dispatcherVehicleIds);
+            
+            if (dispatcherVehicleIds.length > 0) {
+                // 过滤lineFeatures
+                const filteredFeatures = [];
+                lineFeatures.forEach((f, index) => {
+                    const vehicleId = f.properties?.vehicle_id;
+                    const match = dispatcherVehicleIds.includes(vehicleId);
+                    console.log('[DEBUG extractDispatchRoutesForAI] Feature', index, 'vehicle_id:', vehicleId, 'match:', match);
+                    if (match) {
+                        filteredFeatures.push(f);
+                    }
+                });
+                lineFeatures = filteredFeatures;
+                console.log('[DEBUG extractDispatchRoutesForAI] filtered lineFeatures count:', lineFeatures.length);
+            } else {
+                // 如果没有有效的vehicle_id，清空路线
+                lineFeatures = [];
+                console.log('[DEBUG extractDispatchRoutesForAI] no valid vehicle_ids, clearing routes');
+            }
+        } else {
+            // 如果没有分配的路线，清空路线
+            lineFeatures = [];
+            console.log('[DEBUG extractDispatchRoutesForAI] no assigned routes, clearing routes');
+        }
+    }
+
+    // 转换为AI需要的格式
+    const routes = lineFeatures.map((feature, idx) => {
+        const props = feature.properties || {};
+        return {
+            name: props.route_name || `路线${idx + 1}`,
+            vehicle_id: props.vehicle_id || `vehicle_${idx + 1}`,
+            from: props.from || '供应点',
+            to: props.to || '需求点',
+            transfer: Number(props.amount || props.transfer || 0) || 0,
+            shortage: Number(props.shortage || 0) || 0,
+            distance_m: Number(props.total_distance_m || props.distance_m || props.distance || 0) || 0
+        };
+    });
+    
+    console.log('[DEBUG extractDispatchRoutesForAI] returning routes:', JSON.stringify(routes));
+    return routes;
 }
 
 function estimateDispatchShortageCount() {
@@ -8453,10 +10328,29 @@ function getBatteryPayloadForAI() {
         return null;
     }
 
+    // 构建换电路线详细信息
+    const batteryRoutes = [];
+    if (batteryLastRouteResult && batteryLastRouteResult.routes) {
+        batteryLastRouteResult.routes.forEach((route, idx) => {
+            const orderedBikes = Array.isArray(route.ordered_bikes) ? route.ordered_bikes : [];
+            batteryRoutes.push({
+                name: route.route_name || route.name || `换电路线${idx + 1}`,
+                vehicle_name: route.vehicle_name || route.vehicle_id || `换电运维车${idx + 1}`,
+                start: route.start || route.from || '补给点',
+                end: route.end || route.to || '补给点',
+                service_count: orderedBikes.length,
+                distance_m: route.total_distance_m || route.distance_m || route.total_distance || 0,
+                ordered_bikes: orderedBikes
+            });
+        });
+    }
+
     return {
         low_battery_count: lowBatteryCount,
-        route_count: Number(batteryLastRouteResult?.route_count || 0) || 0,
-        capacity_per_trip: Number(batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue()) || 0
+        route_count: Number(batteryLastRouteResult?.route_count || 0) || batteryRoutes.length || 0,
+        capacity_per_trip: Number(batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue()) || 0,
+        total_distance_m: Number(batteryLastRouteResult?.total_distance_m || 0),
+        routes: batteryRoutes
     };
 }
 
@@ -8476,6 +10370,589 @@ function escapeHtml(text) {
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+}
+
+function getFeedbackReporterName() {
+    return String(currentUsername || '').trim() || 'admin';
+}
+
+function getFeedbackReporterDisplay() {
+    const username = getFeedbackReporterName();
+    const roleText = currentUserRole === 'admin' ? '管理员' : '调度员';
+    return `${roleText}（${username}）`;
+}
+
+function getFeedbackStatusClass(status) {
+    return status === '已处理' ? 'done' : 'pending';
+}
+
+function getFeedbackPriorityClass(priority) {
+    if (priority === '紧急') {
+        return 'high';
+    }
+    if (priority === '较急') {
+        return 'medium';
+    }
+    return 'normal';
+}
+
+function syncFeedbackRoleView() {
+    const isAdmin = currentUserRole === 'admin';
+    const createPanel = document.getElementById('feedback-create-panel');
+    const adminPanel = document.getElementById('feedback-admin-panel');
+    const statGrid = document.getElementById('feedback-stat-grid');
+    const listTitle = document.getElementById('feedback-list-title');
+    const moduleTitle = document.getElementById('feedback-module-title');
+    const moduleSubtitle = document.getElementById('feedback-module-subtitle');
+    const statusFilter = document.getElementById('feedback-status-filter');
+
+    feedbackEditingId = null;
+
+    if (createPanel) {
+        createPanel.style.display = isAdmin ? 'none' : '';
+    }
+    if (adminPanel) {
+        adminPanel.style.display = isAdmin ? '' : 'none';
+    }
+    if (statGrid) {
+        statGrid.style.display = isAdmin ? 'grid' : 'none';
+    }
+    if (listTitle) {
+        listTitle.textContent = isAdmin ? '全部反馈列表' : '我的反馈记录';
+    }
+    if (moduleTitle) {
+        moduleTitle.textContent = isAdmin ? '反馈处理' : '意见反馈';
+    }
+    if (moduleSubtitle) {
+        moduleSubtitle.textContent = isAdmin
+            ? '查看全部反馈并完成处理闭环'
+            : '提交执行过程中的问题与建议';
+    }
+
+    if (statusFilter && !isAdmin) {
+        statusFilter.value = 'all';
+    }
+
+    renderFeedbackTableHead(isAdmin);
+    renderFeedbackTable([]);
+}
+
+function renderFeedbackStats(items) {
+    const totalEl = document.getElementById('feedback-stat-total');
+    const pendingEl = document.getElementById('feedback-stat-pending');
+    const doneEl = document.getElementById('feedback-stat-done');
+
+    const list = Array.isArray(items) ? items : [];
+    const total = list.length;
+    const pending = list.filter(item => String(item?.status || '') !== '已处理').length;
+    const done = list.filter(item => String(item?.status || '') === '已处理').length;
+
+    if (totalEl) totalEl.textContent = String(total);
+    if (pendingEl) pendingEl.textContent = String(pending);
+    if (doneEl) doneEl.textContent = String(done);
+}
+
+function renderFeedbackTableHead(isAdmin) {
+    const thead = document.getElementById('feedback-table-head');
+    if (!thead) {
+        return;
+    }
+
+    if (isAdmin) {
+        thead.innerHTML = `
+            <tr>
+                <th class="feedback-col-id">编号</th>
+                <th class="feedback-col-reporter">提交人</th>
+                <th class="feedback-col-type">类型</th>
+                <th class="feedback-col-related">关联任务/路线</th>
+                <th class="feedback-col-description">描述</th>
+                <th class="feedback-col-priority">紧急程度</th>
+                <th class="feedback-col-time">提交时间</th>
+                <th class="feedback-col-status">状态</th>
+                <th class="feedback-col-note">处理备注</th>
+                <th class="feedback-col-action">操作</th>
+            </tr>
+        `;
+    } else {
+        thead.innerHTML = `
+            <tr>
+                <th class="feedback-col-id">编号</th>
+                <th class="feedback-col-type">类型</th>
+                <th class="feedback-col-related">关联任务/路线</th>
+                <th class="feedback-col-description">描述</th>
+                <th class="feedback-col-priority">紧急程度</th>
+                <th class="feedback-col-time">提交时间</th>
+                <th class="feedback-col-status">状态</th>
+                <th class="feedback-col-note">处理备注</th>
+                <th class="feedback-col-action">操作</th>
+            </tr>
+        `;
+    }
+}
+
+function getFeedbackReporterText(item) {
+    const reporterDisplay = String(item?.reporter_display || '').trim();
+    if (reporterDisplay) {
+        return reporterDisplay;
+    }
+
+    const roleText = String(item?.role || '').toLowerCase() === 'admin' ? '管理员' : '调度员';
+    const reporter = String(item?.reporter || '-').trim() || '-';
+    return `${roleText}（${reporter}）`;
+}
+
+function getFeedbackTextCell(text, className) {
+    const raw = String(text || '').trim();
+    const normalized = raw || '-';
+    const escaped = escapeHtml(normalized);
+    return `<td class="${className}" title="${escaped}"><div class="feedback-text-cell">${escaped}</div></td>`;
+}
+
+function renderFeedbackTable(items) {
+    const tbody = document.getElementById('feedback-table-body');
+    if (!tbody) {
+        return;
+    }
+
+    const isAdmin = currentUserRole === 'admin';
+    const colspan = isAdmin ? 10 : 9;
+
+    renderFeedbackTableHead(isAdmin);
+
+    if (!Array.isArray(items) || items.length === 0) {
+        const statusFilter = document.getElementById('feedback-status-filter')?.value || 'all';
+        const emptyText = isAdmin
+            ? (statusFilter === 'all' ? '暂无反馈记录' : '当前筛选条件下暂无反馈记录')
+            : '暂无你提交的反馈记录';
+        tbody.innerHTML = `<tr><td colspan="${colspan}" class="feedback-empty">${emptyText}</td></tr>`;
+        return;
+    }
+
+    const rows = items.map(item => {
+        const id = Number(item?.id) || '-';
+        const reporter = escapeHtml(getFeedbackReporterText(item));
+        const type = escapeHtml(String(item?.type || '其他').trim() || '其他');
+        const relatedTask = String(item?.related_task || '').trim() || '-';
+        const descriptionRaw = String(item?.description || '').trim() || '-';
+        const priorityText = escapeHtml(item?.priority || '一般');
+        const statusText = escapeHtml(item?.status || '待处理');
+        const noteRaw = String(item?.admin_note || '').trim() || '-';
+        const createdAt = escapeHtml(item?.created_at || '-');
+        const statusClass = getFeedbackStatusClass(item?.status);
+        const priorityClass = getFeedbackPriorityClass(item?.priority);
+        const isEditing = isAdmin && feedbackEditingId === id;
+
+        if (isAdmin) {
+            const canClear = String(item?.status || '') === '已处理';
+            const mainRow = `
+                <tr>
+                    <td class="feedback-col-id">${id}</td>
+                    <td class="feedback-col-reporter">${reporter}</td>
+                    <td class="feedback-col-type">${type}</td>
+                    ${getFeedbackTextCell(relatedTask, 'feedback-col-related feedback-cell-related')}
+                    ${getFeedbackTextCell(descriptionRaw, 'feedback-col-description feedback-cell-description')}
+                    <td class="feedback-col-priority"><span class="feedback-priority ${priorityClass}">${priorityText}</span></td>
+                    <td class="feedback-col-time">${createdAt}</td>
+                    <td class="feedback-col-status"><span class="feedback-status ${statusClass}">${statusText}</span></td>
+                    ${getFeedbackTextCell(noteRaw, 'feedback-col-note feedback-cell-note')}
+                    <td class="feedback-col-action">
+                        <div class="feedback-action-stack">
+                            <button class="btn btn-secondary feedback-action-btn feedback-handle-btn" data-feedback-id="${id}">${isEditing ? '收起' : '处理'}</button>
+                            ${canClear ? `<button class="btn btn-danger feedback-action-btn feedback-clear-btn" data-feedback-id="${id}">清除</button>` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `;
+
+            if (!isEditing) {
+                return mainRow;
+            }
+
+            const editorRow = `
+                <tr class="feedback-editor-row">
+                    <td colspan="10">
+                        <div class="feedback-editor-grid">
+                            <select class="feedback-action-select" id="feedback-status-${id}">
+                                <option value="待处理" ${item?.status === '待处理' ? 'selected' : ''}>待处理</option>
+                                <option value="已处理" ${item?.status === '已处理' ? 'selected' : ''}>已处理</option>
+                            </select>
+                            <textarea class="feedback-note-input" id="feedback-note-${id}" rows="2" placeholder="填写处理备注">${escapeHtml(noteRaw === '-' ? '' : noteRaw)}</textarea>
+                            <button class="btn btn-success feedback-action-btn feedback-save-btn" data-feedback-id="${id}">保存</button>
+                            <button class="btn btn-secondary feedback-action-btn feedback-cancel-btn" data-feedback-id="${id}">取消</button>
+                        </div>
+                    </td>
+                </tr>
+            `;
+            return mainRow + editorRow;
+        }
+
+        return `
+            <tr>
+                <td class="feedback-col-id">${id}</td>
+                <td class="feedback-col-type">${type}</td>
+                ${getFeedbackTextCell(relatedTask, 'feedback-col-related feedback-cell-related')}
+                ${getFeedbackTextCell(descriptionRaw, 'feedback-col-description feedback-cell-description')}
+                <td class="feedback-col-priority"><span class="feedback-priority ${priorityClass}">${priorityText}</span></td>
+                <td class="feedback-col-time">${createdAt}</td>
+                <td class="feedback-col-status"><span class="feedback-status ${statusClass}">${statusText}</span></td>
+                ${getFeedbackTextCell(noteRaw, 'feedback-col-note feedback-cell-note')}
+                <td class="feedback-col-action">
+                    ${String(item?.status || '') === '待处理'
+                        ? `<button class="btn btn-danger feedback-action-btn feedback-revoke-btn" data-feedback-id="${id}">撤销</button>`
+                        : '-'}
+                </td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = rows.join('');
+
+    if (!isAdmin) {
+        document.querySelectorAll('.feedback-revoke-btn').forEach(btn => {
+            if (btn.dataset.bound === '1') {
+                return;
+            }
+            btn.dataset.bound = '1';
+            btn.addEventListener('click', async function() {
+                const feedbackId = Number(this.getAttribute('data-feedback-id'));
+                await revokeFeedbackItem(feedbackId);
+            });
+        });
+        return;
+    }
+
+    document.querySelectorAll('.feedback-handle-btn').forEach(btn => {
+        if (btn.dataset.bound === '1') {
+            return;
+        }
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', function() {
+            const feedbackId = Number(this.getAttribute('data-feedback-id'));
+            feedbackEditingId = feedbackEditingId === feedbackId ? null : feedbackId;
+            renderFeedbackTable(applyFeedbackFilter(feedbackListCache));
+        });
+    });
+
+    document.querySelectorAll('.feedback-save-btn').forEach(btn => {
+        if (btn.dataset.bound === '1') {
+            return;
+        }
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async function() {
+            const feedbackId = Number(this.getAttribute('data-feedback-id'));
+            await updateFeedbackItem(feedbackId);
+        });
+    });
+
+    document.querySelectorAll('.feedback-cancel-btn').forEach(btn => {
+        if (btn.dataset.bound === '1') {
+            return;
+        }
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', function() {
+            feedbackEditingId = null;
+            renderFeedbackTable(applyFeedbackFilter(feedbackListCache));
+        });
+    });
+
+    document.querySelectorAll('.feedback-clear-btn').forEach(btn => {
+        if (btn.dataset.bound === '1') {
+            return;
+        }
+        btn.dataset.bound = '1';
+        btn.addEventListener('click', async function() {
+            const feedbackId = Number(this.getAttribute('data-feedback-id'));
+            await clearFeedbackItem(feedbackId);
+        });
+    });
+}
+
+function applyFeedbackFilter(items) {
+    if (currentUserRole !== 'admin') {
+        return Array.isArray(items) ? items : [];
+    }
+
+    const statusFilter = document.getElementById('feedback-status-filter')?.value || 'all';
+    if (statusFilter === 'all') {
+        return Array.isArray(items) ? items : [];
+    }
+
+    return (Array.isArray(items) ? items : []).filter(item => String(item?.status || '') === statusFilter);
+}
+
+async function refreshFeedbackList(silent) {
+    const isAdmin = currentUserRole === 'admin';
+    const requestRole = currentUserRole;
+    const requestSeq = ++feedbackRequestSeq;
+    const params = new URLSearchParams({
+        role: currentUserRole,
+        reporter: getFeedbackReporterName(),
+        _ts: String(Date.now())
+    });
+
+    try {
+        const response = await fetch(`/api/feedback/list?${params.toString()}`, {
+            cache: 'no-store'
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const data = await response.json();
+
+        if (requestSeq !== feedbackRequestSeq || requestRole !== currentUserRole) {
+            return;
+        }
+
+        feedbackListCache = Array.isArray(data?.items) ? data.items : [];
+
+        if (isAdmin) {
+            renderFeedbackStats(feedbackListCache);
+        }
+
+        const viewItems = applyFeedbackFilter(feedbackListCache);
+        renderFeedbackTable(viewItems);
+    } catch (error) {
+        if (requestSeq !== feedbackRequestSeq || requestRole !== currentUserRole) {
+            return;
+        }
+        console.error('获取反馈列表失败:', error);
+        if (isAdmin) {
+            renderFeedbackStats([]);
+        }
+        renderFeedbackTable([]);
+        if (!silent) {
+            showToast('反馈列表加载失败，请稍后重试');
+        }
+    }
+}
+
+async function submitFeedback() {
+    if (currentUserRole === 'admin') {
+        showToast('管理员账号不需要提交反馈');
+        return;
+    }
+
+    const type = document.getElementById('feedback-type')?.value || '其他';
+    const relatedTask = (document.getElementById('feedback-related-task')?.value || '').trim();
+    const descriptionEl = document.getElementById('feedback-description');
+    const description = (descriptionEl?.value || '').trim();
+    const priority = document.getElementById('feedback-priority')?.value || '一般';
+
+    if (!description) {
+        showToast('请填写详细描述后再提交');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/feedback/create', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                reporter: getFeedbackReporterName(),
+                reporter_display: getFeedbackReporterDisplay(),
+                role: currentUserRole,
+                type,
+                related_task: relatedTask,
+                description,
+                priority
+            })
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err?.message || `HTTP ${response.status}`);
+        }
+
+        if (descriptionEl) {
+            descriptionEl.value = '';
+        }
+        const relatedTaskEl = document.getElementById('feedback-related-task');
+        if (relatedTaskEl) {
+            relatedTaskEl.value = '';
+        }
+        const priorityEl = document.getElementById('feedback-priority');
+        if (priorityEl) {
+            priorityEl.value = '一般';
+        }
+        const typeEl = document.getElementById('feedback-type');
+        if (typeEl) {
+            typeEl.value = '路线执行问题';
+        }
+
+        showToast('反馈提交成功');
+        await refreshFeedbackList(true);
+    } catch (error) {
+        console.error('提交反馈失败:', error);
+        showToast(`反馈提交失败：${error.message || '未知错误'}`);
+    }
+}
+
+async function updateFeedbackItem(feedbackId) {
+    if (currentUserRole !== 'admin') {
+        showToast('当前角色无权限处理反馈');
+        return;
+    }
+
+    const statusEl = document.getElementById(`feedback-status-${feedbackId}`);
+    const noteEl = document.getElementById(`feedback-note-${feedbackId}`);
+    const status = statusEl?.value || '待处理';
+    const adminNote = (noteEl?.value || '').trim();
+
+    try {
+        const response = await fetch('/api/feedback/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                id: feedbackId,
+                role: currentUserRole,
+                status: status,
+                admin_note: adminNote
+            })
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            throw new Error(payload?.message || `HTTP ${response.status}`);
+        }
+
+        const updatedItem = payload?.item;
+        if (updatedItem && Number(updatedItem.id) === Number(feedbackId)) {
+            feedbackListCache = (Array.isArray(feedbackListCache) ? feedbackListCache : []).map(item =>
+                Number(item?.id) === Number(feedbackId) ? updatedItem : item
+            );
+        }
+
+        showToast('反馈处理已保存');
+        feedbackEditingId = null;
+        if (currentUserRole === 'admin') {
+            renderFeedbackStats(feedbackListCache);
+        }
+        renderFeedbackTable(applyFeedbackFilter(feedbackListCache));
+        await refreshFeedbackList(true);
+    } catch (error) {
+        console.error('更新反馈失败:', error);
+        showToast(`更新失败：${error.message || '未知错误'}`);
+    }
+}
+
+async function revokeFeedbackItem(feedbackId) {
+    if (currentUserRole === 'admin') {
+        showToast('管理员账号不能撤销反馈');
+        return;
+    }
+
+    if (!Number.isFinite(feedbackId) || feedbackId <= 0) {
+        showToast('反馈编号无效');
+        return;
+    }
+
+    if (!window.confirm('确认撤销该条待处理反馈吗？')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/feedback/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                id: feedbackId,
+                role: currentUserRole,
+                reporter: getFeedbackReporterName(),
+                action: 'revoke'
+            })
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err?.message || `HTTP ${response.status}`);
+        }
+
+        showToast('反馈已撤销');
+        await refreshFeedbackList(true);
+    } catch (error) {
+        console.error('撤销反馈失败:', error);
+        showToast(`撤销失败：${error.message || '未知错误'}`);
+    }
+}
+
+async function clearFeedbackItem(feedbackId) {
+    if (currentUserRole !== 'admin') {
+        showToast('当前角色无权限清空反馈');
+        return;
+    }
+
+    if (!Number.isFinite(feedbackId) || feedbackId <= 0) {
+        showToast('反馈编号无效');
+        return;
+    }
+
+    if (!window.confirm('确认清空该条已处理反馈吗？')) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/feedback/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                id: feedbackId,
+                role: currentUserRole,
+                action: 'clear'
+            })
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err?.message || `HTTP ${response.status}`);
+        }
+
+        showToast('已清空该条反馈');
+        feedbackEditingId = null;
+        await refreshFeedbackList(true);
+    } catch (error) {
+        console.error('清空反馈失败:', error);
+        showToast(`清空失败：${error.message || '未知错误'}`);
+    }
+}
+
+function initFeedbackModuleEvents() {
+    const submitBtn = document.getElementById('feedback-submit-btn');
+    const refreshBtn = document.getElementById('feedback-refresh-btn');
+    const statusFilter = document.getElementById('feedback-status-filter');
+
+    if (submitBtn && !submitBtn.dataset.bound) {
+        submitBtn.dataset.bound = '1';
+        submitBtn.addEventListener('click', function() {
+            submitFeedback();
+        });
+    }
+
+    if (refreshBtn && !refreshBtn.dataset.bound) {
+        refreshBtn.dataset.bound = '1';
+        refreshBtn.addEventListener('click', function() {
+            refreshFeedbackList(false);
+        });
+    }
+
+    if (statusFilter && !statusFilter.dataset.bound) {
+        statusFilter.dataset.bound = '1';
+        statusFilter.addEventListener('change', function() {
+            if (currentUserRole === 'admin') {
+                feedbackEditingId = null;
+                renderFeedbackTable(applyFeedbackFilter(feedbackListCache));
+            }
+        });
+    }
+
+    syncFeedbackRoleView();
 }
 
 // function renderCompareReport(result) {
@@ -8575,6 +11052,24 @@ async function postAIData(endpoint, payload) {
     return response.json();
 }
 
+function updateAIPanelFocus() {
+    const isAdmin = currentUserRole === 'admin';
+    const sections = {
+        'ai-compare-section': isAdmin,
+        'ai-priority-section': true,
+        'ai-risk-section': true,
+        'ai-decision-section': isAdmin,
+        'ai-chat-section': true
+    };
+
+    Object.entries(sections).forEach(([id, visible]) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.style.display = visible ? '' : 'none';
+        }
+    });
+}
+
 function updateAIRoleView() {
     const roleFocus = document.getElementById('ai-role-focus');
     const compareInstruction = document.getElementById('ai-compare-instruction');
@@ -8627,16 +11122,64 @@ async function generateAIReport() {
 async function generateAIPriority() {
     const requestToken = aiPanelSessionToken;
     const dispatch = getDispatchPayloadForAI();
-    if (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0) {
-        showToast('请先运行调度优化后再生成调度待办');
-        renderAIList('ai-priority-card', 'ai-priority-list', [AI_RESULT_FALLBACK_TEXT]);
-        return;
+    const battery = getBatteryPayloadForAI();
+    
+    // For dispatchers, check if they have assigned routes
+    if (currentUserRole === 'dispatcher') {
+        const myRoutes = getDispatcherRoutes();
+        const myBatteryRoutes = getDispatcherBatteryRoutes();
+        
+        if (myRoutes.length === 0 && myBatteryRoutes.length === 0) {
+            showToast('当前未分配任何任务，请联系管理员分配后再试');
+            renderAIList('ai-priority-card', 'ai-priority-list', ['当前未分配任何任务，请联系管理员分配后再试']);
+            return;
+        }
+        
+        // 转换调度员分配的路线为AI后端需要的格式
+        if (myRoutes.length > 0) {
+            const allRoutes = extractDispatchRoutesForAI();
+            console.log('[DEBUG generateAIPriority] filtered dispatch routes:', JSON.stringify(allRoutes));
+            dispatch.routes = allRoutes;
+        } else {
+            // 如果没有分配的调度路线，清空调度路线列表
+            dispatch.routes = [];
+            console.log('[DEBUG generateAIPriority] no assigned dispatch routes, clearing routes');
+        }
+        
+        // 处理换电路线：只显示分配给自己的
+        if (battery) {
+            if (myBatteryRoutes.length > 0) {
+                battery.routes = myBatteryRoutes;
+                battery.route_count = myBatteryRoutes.length;
+                console.log('[DEBUG generateAIPriority] using assigned battery routes:', JSON.stringify(myBatteryRoutes));
+            } else {
+                // 如果没有分配的换电路线，清空换电路线列表
+                battery.routes = [];
+                battery.route_count = 0;
+                console.log('[DEBUG generateAIPriority] no assigned battery routes, clearing routes');
+            }
+        } else {
+            // 如果没有battery对象，创建一个空的
+            console.log('[DEBUG generateAIPriority] no battery object, creating empty');
+        }
+    } else if (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0) {
+        if (!battery || !battery.routes || battery.routes.length === 0) {
+            showToast('请先运行调度优化或电池运维后再生成调度待办');
+            renderAIList('ai-priority-card', 'ai-priority-list', [AI_RESULT_FALLBACK_TEXT]);
+            return;
+        }
     }
 
     try {
+        console.log('[DEBUG generateAIPriority] sending to backend:', JSON.stringify({
+            role: currentUserRole,
+            dispatch: dispatch,
+            battery: battery || undefined
+        }));
         const result = await postAIData('/api/ai/priority', {
             role: currentUserRole,
-            dispatch: dispatch
+            dispatch: dispatch,
+            battery: battery || undefined
         });
         if (isAIPanelSessionStale(requestToken)) {
             return;
@@ -8658,12 +11201,42 @@ async function generateAIRisk() {
     const battery = getBatteryPayloadForAI();
     const compare = getComparePayloadForAI();
 
+    // For dispatchers, check if they have assigned routes
+    if (currentUserRole === 'dispatcher') {
+        const myRoutes = getDispatcherRoutes();
+        const myBatteryRoutes = getDispatcherBatteryRoutes();
+        
+        if (myRoutes.length === 0 && myBatteryRoutes.length === 0) {
+            showToast('当前未分配任何任务，请联系管理员分配后再试');
+            renderAIList('ai-risk-card', 'ai-risk-list', ['当前未分配任何任务，请联系管理员分配后再试']);
+            return;
+        }
+        
+        // 转换调度员分配的路线为AI后端需要的格式
+        if (myRoutes.length > 0) {
+            const allRoutes = extractDispatchRoutesForAI();
+            dispatch.routes = allRoutes;
+        } else {
+            // 如果没有分配调度路线，清空调度路线数据
+            dispatch.routes = [];
+        }
+        
+        // 处理换电路线
+        if (myBatteryRoutes.length > 0 && battery) {
+            battery.routes = myBatteryRoutes;
+            battery.route_count = myBatteryRoutes.length;
+        } else if (battery) {
+            battery.routes = [];
+            battery.route_count = 0;
+        }
+    }
+
     const hasMetrics = Number(metrics.coverage) > 0 || Number(metrics.avg_distance) > 0 || Number(metrics.balance) > 0;
     const hasDispatch = Array.isArray(dispatch.routes) && dispatch.routes.length > 0;
-    const hasBattery = Number(metrics.low_battery_count) > 0;
+    const hasBattery = battery && (Number(battery.low_battery_count) > 0 || (Array.isArray(battery.routes) && battery.routes.length > 0));
 
     if (!hasMetrics && !hasDispatch && !hasBattery) {
-        showToast('请先运行选址或调度模块后再生成风险提示');
+        showToast('\xe8��先运行选址或调度模块后再生成风险提示');
         renderAIList('ai-risk-card', 'ai-risk-list', [AI_RESULT_FALLBACK_TEXT]);
         return;
     }
@@ -8696,7 +11269,41 @@ async function generateAIDecision() {
     const dispatch = getDispatchPayloadForAI();
     const battery = getBatteryPayloadForAI();
 
-    if (!compare && (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0)) {
+    // For dispatchers, check if they have assigned routes
+    if (currentUserRole === 'dispatcher') {
+        const myRoutes = getDispatcherRoutes();
+        const myBatteryRoutes = getDispatcherBatteryRoutes();
+        
+        if (myRoutes.length === 0 && myBatteryRoutes.length === 0) {
+            showToast('当前未分配任何任务，请联系管理员分配后再试');
+            setTextResult('ai-decision-card', 'ai-decision-content', '当前未分配任何任务，请联系管理员分配后再试');
+            return;
+        }
+        
+        // 转换调度员分配的路线为AI后端需要的格式
+            if (myRoutes.length > 0) {
+                const myVehicleIds = new Set(myRoutes.map(r => r.vehicle_id || r.route_id));
+                console.log('[DEBUG generateAIPriority] myVehicleIds:', Array.from(myVehicleIds));
+                const allRoutes = extractDispatchRoutesForAI();
+                console.log('[DEBUG generateAIPriority] allRoutes:', JSON.stringify(allRoutes));
+                const filteredRoutes = allRoutes.filter(route => {
+                    // 直接基于vehicle_id匹配
+                    const match = myVehicleIds.has(route.vehicle_id) || 
+                        myVehicleIds.has(route.name) ||
+                        myVehicleIds.has(route.route_id);
+                    console.log('[DEBUG generateAIPriority] route:', route, 'match:', match);
+                    return match;
+                });
+                console.log('[DEBUG generateAIPriority] filteredRoutes:', JSON.stringify(filteredRoutes));
+                dispatch.routes = filteredRoutes;
+            }
+        
+        // 如果有分配给自己的换电路线，也传递给后端
+        if (myBatteryRoutes.length > 0 && battery) {
+            battery.routes = myBatteryRoutes;
+            battery.route_count = myBatteryRoutes.length;
+        }
+    } else if (!compare && (!Array.isArray(dispatch.routes) || dispatch.routes.length === 0)) {
         showToast('请先运行相关模块后再生成决策建议');
         setTextResult('ai-decision-card', 'ai-decision-content', AI_RESULT_FALLBACK_TEXT);
         return;
@@ -8803,6 +11410,23 @@ function waitForNextPaint() {
     return new Promise(resolve => {
         requestAnimationFrame(() => requestAnimationFrame(resolve));
     });
+}
+
+function getLayoutViewportSize() {
+    const width = Math.round(
+        window.innerWidth ||
+        document.documentElement.clientWidth ||
+        0
+    );
+    const height = Math.round(
+        window.innerHeight ||
+        document.documentElement.clientHeight ||
+        0
+    );
+    return {
+        width: Math.max(1, width),
+        height: Math.max(1, height)
+    };
 }
 
 function getViewportSize() {
@@ -8953,7 +11577,7 @@ async function capturePageViaHtml2Canvas() {
 
     const docEl = document.documentElement;
     const body = document.body;
-    const viewport = getViewportSize();
+    const viewport = getLayoutViewportSize();
 
     // 仅按可视宽度捕获，避免出现横向滚动条导致截图层底部/右侧出现缝隙
     const pageWidth = Math.max(
@@ -9023,7 +11647,7 @@ async function startCustomScreenshot() {
     let captureResult = null;
     let lastErr = null;
 
-    const viewport = getViewportSize();
+    const viewport = getLayoutViewportSize();
     const docEl = document.documentElement;
     const body = document.body;
     const pageHeight = Math.max(
@@ -9041,7 +11665,7 @@ async function startCustomScreenshot() {
             tip.remove();
             const canvas = await captureViewportViaDisplayMedia();
             // 捕获后（"正在共享"栏收回）重新量测视口，保证叠加层尺寸与实际视口一致
-            const vpAfter = getViewportSize();
+            const vpAfter = getLayoutViewportSize();
             captureResult = {
                 canvas,
                 displayWidth: vpAfter.width,
@@ -9089,13 +11713,20 @@ async function startCustomScreenshot() {
 
 function openScreenshotOverlay(captureResult, onClose) {
     const srcCanvas = captureResult.canvas;
-    const viewportSize = getViewportSize();
+    const viewportSize = getLayoutViewportSize();
     const vw = viewportSize.width;
     const vh = viewportSize.height;
-    const displayWidth = Number(captureResult.displayWidth) || vw;
-    const displayHeight = Number(captureResult.displayHeight) || vh;
-    const scaleX = srcCanvas.width / displayWidth;
-    const scaleY = srcCanvas.height / displayHeight;
+    let displayWidth = Number(captureResult.displayWidth) || vw;
+    let displayHeight = Number(captureResult.displayHeight) || vh;
+
+    // 对于“仅截取当前视口”的场景，displayWidth/Height 应严格等于布局视口尺寸。
+    // 若误用 visualViewport 导致 displayHeight 偏小，会出现叠加层内容整体上移、底部露黑边。
+    if (displayWidth <= vw + 1 && displayHeight <= vh + 1) {
+        displayWidth = vw;
+        displayHeight = vh;
+    }
+    let scaleX = srcCanvas.width / displayWidth;
+    let scaleY = srcCanvas.height / displayHeight;
 
     const overlay = document.createElement('div');
     overlay.dataset.screenshotIgnore = '1';
@@ -9133,8 +11764,8 @@ function openScreenshotOverlay(captureResult, onClose) {
     bg.height = Math.round(displayHeight);
     Object.assign(bg.style, {
         position: 'absolute', left: 0, top: 0,
-        width: displayWidth + 'px',
-        height: displayHeight + 'px',
+        width: needScroll ? (displayWidth + 'px') : '100%',
+        height: needScroll ? (displayHeight + 'px') : '100%',
         pointerEvents: 'none'
     });
     const bgCtx = bg.getContext('2d');
@@ -9188,6 +11819,67 @@ function openScreenshotOverlay(captureResult, onClose) {
     document.body.appendChild(overlay);
 
     let startX = 0, startY = 0, curX = 0, curY = 0, dragging = false, hasSelection = false;
+    let renderSelection = null;
+    let positionToolbar = null;
+
+    // 叠加层挂载后：对“仅截取当前视口”的模式做持续校准。
+    // Chrome 在 getDisplayMedia 期间可能短暂出现/收回“正在共享”栏，导致 innerHeight 变化；
+    // 若只初始化一次，会出现内容整体上移、底部露黑边。
+    const syncStageToViewport = () => {
+        if (needScroll) {
+            return;
+        }
+        const rect = stage.getBoundingClientRect();
+        const measuredW = Math.max(1, Math.round(rect.width));
+        const measuredH = Math.max(1, Math.round(rect.height));
+        if (!measuredW || !measuredH) {
+            return;
+        }
+
+        if (measuredW !== displayWidth || measuredH !== displayHeight) {
+            displayWidth = measuredW;
+            displayHeight = measuredH;
+            scaleX = srcCanvas.width / displayWidth;
+            scaleY = srcCanvas.height / displayHeight;
+
+            // 背景画布内部尺寸跟随 stage，CSS 用 100% 铺满。
+            bg.width = measuredW;
+            bg.height = measuredH;
+            bgCtx.setTransform(1, 0, 0, 1, 0, 0);
+            bgCtx.clearRect(0, 0, measuredW, measuredH);
+            bgCtx.drawImage(srcCanvas, 0, 0, srcCanvas.width, srcCanvas.height, 0, 0, measuredW, measuredH);
+        }
+    };
+
+    // 先同步一次，再监听 resize。
+    syncStageToViewport();
+    const onResize = () => {
+        syncStageToViewport();
+        // 若已有选区，尺寸变化后需要重绘一次避免错位
+        if (hasSelection) {
+            renderSelection();
+            positionToolbar();
+        }
+    };
+    window.addEventListener('resize', onResize);
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', onResize);
+        window.visualViewport.addEventListener('scroll', onResize);
+    }
+
+    // 稳定期校准：覆盖某些浏览器未触发 resize 的视口变化。
+    if (!needScroll) {
+        let syncFrames = 0;
+        const maxFrames = 40; // 约 0.6s@60fps
+        const tick = () => {
+            syncStageToViewport();
+            syncFrames++;
+            if (syncFrames < maxFrames) {
+                requestAnimationFrame(tick);
+            }
+        };
+        requestAnimationFrame(tick);
+    }
 
     const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
     const toStagePos = (evt) => {
@@ -9203,7 +11895,7 @@ function openScreenshotOverlay(captureResult, onClose) {
         return { x, y, w, h };
     };
 
-    const renderSelection = () => {
+    renderSelection = () => {
         const r = getRect();
         if (r.w < 2 || r.h < 2) { sel.style.display = 'none'; return; }
         sel.style.display = 'block';
@@ -9223,7 +11915,7 @@ function openScreenshotOverlay(captureResult, onClose) {
         sizeLabel.textContent = `${Math.round(r.w)} × ${Math.round(r.h)}`;
     };
 
-    const positionToolbar = () => {
+    positionToolbar = () => {
         const r = getRect();
         toolbar.style.display = 'block';
         const tw = toolbar.offsetWidth, th = toolbar.offsetHeight;
@@ -9257,6 +11949,11 @@ function openScreenshotOverlay(captureResult, onClose) {
     const close = () => {
         overlay.remove();
         document.removeEventListener('keydown', onKey);
+        window.removeEventListener('resize', onResize);
+        if (window.visualViewport) {
+            window.visualViewport.removeEventListener('resize', onResize);
+            window.visualViewport.removeEventListener('scroll', onResize);
+        }
         if (typeof onClose === 'function') onClose();
     };
 
@@ -9298,15 +11995,18 @@ function openScreenshotOverlay(captureResult, onClose) {
     };
 
     const autoScrollWhileDragging = (evt) => {
+        const vpNow = getLayoutViewportSize();
+        const vwNow = vpNow.width;
+        const vhNow = vpNow.height;
         const edge = 36;
         const step = 24;
-        if (evt.clientY > vh - edge) {
+        if (evt.clientY > vhNow - edge) {
             viewport.scrollTop = Math.min(displayHeight - viewport.clientHeight, viewport.scrollTop + step);
         } else if (evt.clientY < edge) {
             viewport.scrollTop = Math.max(0, viewport.scrollTop - step);
         }
 
-        if (evt.clientX > vw - edge) {
+        if (evt.clientX > vwNow - edge) {
             viewport.scrollLeft = Math.min(displayWidth - viewport.clientWidth, viewport.scrollLeft + step);
         } else if (evt.clientX < edge) {
             viewport.scrollLeft = Math.max(0, viewport.scrollLeft - step);
@@ -9369,7 +12069,7 @@ function showComparison() {
     }
 
     updateCoreMetrics();
-    generateSupplyDemandTable(getActiveSupplyTimeSlot());
+    generateSupplyDemandTable(getActiveSupplyTimeSlot(), selectedScheme);
 
     const analysis = getComparisonAnalysis();
     const recommendedText = analysis.recommendedScheme === 'smart' ? '智能选址方案' : '人工选址方案';
@@ -9567,10 +12267,33 @@ function updateBatteryOperationButtons() {
     }
 }
 
+function updateDispatchOperationButtons() {
+    const runDispatchBtn = document.getElementById('run-dispatch-btn');
+    const dispatchAssignmentBtn = document.getElementById('dispatch-assignment-btn');
+    const clearDispatchBtn = document.querySelector('button[onclick="clearDispatch()"]');
+    const roleTip = document.getElementById('dispatch-role-tip');
+    const isAdmin = currentUserRole === 'admin';
+
+    if (runDispatchBtn) {
+        runDispatchBtn.style.display = isAdmin ? '' : 'none';
+    }
+    if (dispatchAssignmentBtn) {
+        dispatchAssignmentBtn.style.display = isAdmin ? '' : 'none';
+    }
+    if (clearDispatchBtn) {
+        clearDispatchBtn.style.display = isAdmin ? '' : 'none';
+    }
+    if (roleTip) {
+        roleTip.style.display = isAdmin ? 'none' : 'block';
+    }
+}
+
 function getBatteryCapacityValue() {
     const input = document.getElementById('battery-capacity');
     const value = Number(input?.value);
-    const normalized = Number.isFinite(value) ? Math.max(1, Math.floor(value)) : BATTERY_DEFAULT_CAPACITY;
+    const minValue = currentUserRole === 'admin' ? 10 : 0;
+    const fallback = currentUserRole === 'admin' ? BATTERY_DEFAULT_CAPACITY : 0;
+    const normalized = Number.isFinite(value) ? Math.max(minValue, Math.floor(value)) : fallback;
     if (input) {
         input.value = String(normalized);
     }
@@ -9582,13 +12305,15 @@ function setBatteryCapacityValue(value) {
     if (!input) {
         return;
     }
-    const normalized = Number.isFinite(Number(value)) ? Math.max(1, Math.floor(Number(value))) : BATTERY_DEFAULT_CAPACITY;
+    const minValue = currentUserRole === 'admin' ? 10 : 0;
+    const fallback = currentUserRole === 'admin' ? BATTERY_DEFAULT_CAPACITY : 0;
+    const normalized = Number.isFinite(Number(value)) ? Math.max(minValue, Math.floor(Number(value))) : fallback;
     input.value = String(normalized);
 }
 
 function loadBatteryOpsState() {
     try {
-        const raw = localStorage.getItem(BATTERY_STATE_STORAGE_KEY);
+        const raw = localStorage.getItem('batteryOpsState');
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         return parsed && typeof parsed === 'object' ? parsed : null;
@@ -9599,7 +12324,7 @@ function loadBatteryOpsState() {
 
 function saveBatteryOpsState(state) {
     try {
-        localStorage.setItem(BATTERY_STATE_STORAGE_KEY, JSON.stringify(state || {}));
+        localStorage.setItem('batteryOpsState', JSON.stringify(state));
     } catch (_) {
         // ignore storage failure
     }
@@ -9607,7 +12332,7 @@ function saveBatteryOpsState(state) {
 
 function clearBatteryOpsPersistedState() {
     try {
-        localStorage.removeItem(BATTERY_STATE_STORAGE_KEY);
+        localStorage.removeItem('batteryOpsState');
     } catch (_) {
         // ignore storage failure
     }
@@ -9615,7 +12340,19 @@ function clearBatteryOpsPersistedState() {
 
 function resetAIPanelStateForNewLogin() {
     aiPanelSessionToken += 1;
-    latestDispatchResult = null;
+    // 先尝试从localStorage恢复调度结果（如果有的话）
+    if (!latestDispatchResult) {
+        const storedDispatch = localStorage.getItem('latestDispatchResult');
+        if (storedDispatch) {
+            try {
+                latestDispatchResult = JSON.parse(storedDispatch);
+                console.log('[DEBUG] resetAIPanelStateForNewLogin: 已从localStorage恢复调度结果');
+            } catch (e) {
+                console.error('恢复调度结果失败:', e);
+                latestDispatchResult = null;
+            }
+        }
+    }
 
     const reportCard = document.getElementById('ai-report-card');
     const priorityCard = document.getElementById('ai-priority-card');
@@ -9675,8 +12412,7 @@ function resetAIPanelStateForNewLogin() {
 }
 
 function resetBatteryOpsStateForNewLogin() {
-    clearBatteryOpsPersistedState();
-
+    const isAdmin = currentUserRole === 'admin';
     batteryRouteAssignments = {};
     batteryLastRouteResult = null;
     currentLowBatteryList = [];
@@ -9694,13 +12430,15 @@ function resetBatteryOpsStateForNewLogin() {
         thresholdSelect.value = '30';
     }
     if (capacityInput) {
-        capacityInput.value = String(BATTERY_DEFAULT_CAPACITY);
+        capacityInput.value = String(isAdmin ? BATTERY_DEFAULT_CAPACITY : 0);
     }
     if (dispatchInput) {
         dispatchInput.value = '';
     }
     if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>';
+        tbody.innerHTML = isAdmin
+            ? '<tr><td colspan="5" style="color:#999;padding:20px;">请点击筛选按钮查看低电量车辆</td></tr>'
+            : '<tr><td colspan="5" style="color:#999;padding:20px;">请输入负责运维车编号后查看</td></tr>';
     }
 
     updateLowBatteryMetric(0);
@@ -9708,9 +12446,10 @@ function resetBatteryOpsStateForNewLogin() {
         lowCount: 0,
         vehicleCount: 0,
         routeCount: 0,
-        capacityPerTrip: BATTERY_DEFAULT_CAPACITY,
+        capacityPerTrip: isAdmin ? BATTERY_DEFAULT_CAPACITY : 0,
         routes: []
     });
+    setBatteryRouteDetailHint(isAdmin ? '尚未生成换电路线' : '请输入负责运维车编号后查看路线明细');
 }
 
 function persistBatteryOpsSnapshot() {
@@ -9734,12 +12473,13 @@ function hydrateBatteryOpsView() {
     const tbody = document.getElementById('battery-table-body');
     const dispatchInput = document.getElementById('battery-dispatch-vehicle-id');
     const state = loadBatteryOpsState();
+    const isAdmin = currentUserRole === 'admin';
 
     if (state) {
         if (thresholdSelect && Number.isFinite(Number(state.threshold))) {
             thresholdSelect.value = String(Number(state.threshold));
         }
-        setBatteryCapacityValue(state.capacity_per_trip);
+        setBatteryCapacityValue(isAdmin ? state.capacity_per_trip : 0);
 
         if (dispatchInput) {
             const vehicleKey = String(state.dispatcher_vehicle_key || '').trim();
@@ -9765,51 +12505,52 @@ function hydrateBatteryOpsView() {
         if (state.route_result && typeof state.route_result === 'object') {
             batteryLastRouteResult = state.route_result;
             clearBatteryRouteLines();
-            if (currentUserRole === 'admin') {
+            if (isAdmin) {
                 drawBatteryRoute(state.route_result, state.route_result?.bike_count || currentLowBatteryList.length, {
                     silentToast: true,
                     skipPersist: true
                 });
             } else {
-                applyDispatcherVehicleFilter({
-                    silent: true,
-                    skipPersist: true,
-                    noInputToast: true,
-                    autoHydrate: true
-                });
+                // 对于调度员，直接自动显示分配的路线
+                setTimeout(() => {
+                    applyDispatcherVehicleFilter({
+                        skipBootstrap: true,
+                        silent: true,
+                        skipPersist: true
+                    });
+                }, 100);
             }
         } else {
             batteryLastRouteResult = null;
             updateBatteryResultPanel({
-                lowCount: currentLowBatteryList.length,
+                lowCount: isAdmin ? currentLowBatteryList.length : 0,
                 vehicleCount: 0,
                 routeCount: 0,
-                capacityPerTrip: getBatteryCapacityValue(),
+                capacityPerTrip: isAdmin ? getBatteryCapacityValue() : 0,
                 routes: []
             });
+            if (!isAdmin) {
+                setBatteryRouteDetailHint('当前未分配路线！');
+            }
         }
     } else {
-        setBatteryCapacityValue(BATTERY_DEFAULT_CAPACITY);
+        setBatteryCapacityValue(isAdmin ? BATTERY_DEFAULT_CAPACITY : 0);
         updateBatteryResultPanel({
-            lowCount: currentLowBatteryList.length,
-            vehicleCount: batteryLastRouteResult?.vehicle_count || 0,
-            routeCount: batteryLastRouteResult?.route_count || 0,
-            capacityPerTrip: getBatteryCapacityValue(),
-            routes: batteryLastRouteResult?.routes || []
+            lowCount: isAdmin ? currentLowBatteryList.length : 0,
+            vehicleCount: isAdmin ? (batteryLastRouteResult?.vehicle_count || 0) : 0,
+            routeCount: isAdmin ? (batteryLastRouteResult?.route_count || 0) : 0,
+            capacityPerTrip: isAdmin ? getBatteryCapacityValue() : 0,
+            routes: isAdmin ? (batteryLastRouteResult?.routes || []) : []
         });
+        if (!isAdmin) {
+            setBatteryRouteDetailHint('当前未分配路线！');
+        }
     }
 
-    if (tbody && currentUserRole === 'admin') {
+    if (tbody && isAdmin) {
         renderBatteryTableRows(currentLowBatteryList, tbody);
-    }
-
-    if (currentUserRole !== 'admin') {
-        applyDispatcherVehicleFilter({
-            silent: true,
-            skipPersist: true,
-            noInputToast: true,
-            autoHydrate: true
-        });
+    } else if (tbody) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">当前未分配路线！</td></tr>';
     }
 
     updateBatteryOperationButtons();
@@ -9913,18 +12654,18 @@ function orderBikesByNearestNeighbor(bikes, start) {
 function normalizeBatteryBikeRecord(raw, index) {
     const lngRaw = Number(raw?.lng);
     const latRaw = Number(raw?.lat);
-    if (!Number.isFinite(lngRaw) || !Number.isFinite(latRaw)) {
-        return null;
-    }
-
-    const normalized = normalizeBikeToBd09(lngRaw, latRaw);
     const batteryVal = Number(raw?.battery);
     const idRaw = raw?.id != null ? String(raw.id) : String(index + 1);
 
+    // 使用默认值处理无效的经纬度
+    const lng = Number.isFinite(lngRaw) ? lngRaw : 116.3;
+    const lat = Number.isFinite(latRaw) ? latRaw : 39.9;
+    const normalized = normalizeBikeToBd09(lng, lat);
+
     return {
         id: idRaw.startsWith('ebike_') ? idRaw : ('ebike_' + idRaw),
-        lng: normalized ? normalized.lng : lngRaw,
-        lat: normalized ? normalized.lat : latRaw,
+        lng: normalized ? normalized.lng : lng,
+        lat: normalized ? normalized.lat : lat,
         battery: Number.isFinite(batteryVal) ? batteryVal : 100,
         last_used: raw?.last_used || raw?.lastUsed || raw?.time_slot || '-',
         status: raw?.status || 'idle',
@@ -9933,10 +12674,10 @@ function normalizeBatteryBikeRecord(raw, index) {
 }
 
 function updateLowBatteryMetric(count) {
-    const el = document.getElementById('low-battery-bikes');
-    if (el) {
-        el.textContent = String(count);
-    }
+    // 限制低电量车辆数，避免异常值
+    const limitedCount = Math.min(count, 100);
+    // 调用updateSystemStatus来更新系统状态
+    updateSystemStatus(limitedCount, null);
 }
 
 function updateBatteryResultPanel(result) {
@@ -10046,12 +12787,14 @@ function renderLowBatteryMarkers(lowBattery) {
                 icon: makeLowBatteryIcon(Number(bike.battery) || 0)
             });
             marker.setTitle(`${bike.id} 电量 ${Math.round(bike.battery)}%`);
+            marker.setZIndex(10000); // 设置高zIndex，确保在最上方
             map.addOverlay(marker);
             lowBatteryMarkers.push(marker);
         } catch (_) {
             // ignore individual marker errors
         }
     });
+    updateLayerVisibility();
 }
 
 async function fetchLowBatteryFromApi(threshold) {
@@ -10070,8 +12813,50 @@ async function fetchLowBatteryFromApi(threshold) {
 }
 
 async function getLowBatteryCandidates(threshold) {
+    // 尝试加载路网，但即使失败也继续执行
+    try {
+        const roadReady = await ensureEbikeRoadNetwork();
+        console.log('路网加载状态:', roadReady, '节点数:', Object.keys(realRoadNetwork.nodes).length);
+    } catch (error) {
+        console.warn('路网加载失败，使用原始位置:', error);
+    }
+    
+    console.log('开始筛选低电量车辆，路网节点数:', Object.keys(realRoadNetwork.nodes).length);
+    
     const fromApi = await fetchLowBatteryFromApi(threshold);
-    return { bikes: fromApi, source: 'api' };
+    console.log('从API获取到的低电量车辆数:', fromApi.length);
+    
+    // 只保留校园边界内的低电量车辆
+    const filteredBikes = fromApi
+        .filter(bike => {
+            const inside = isInsideBoundary(bike.lat, bike.lng);
+            if (!inside) {
+                console.log('车辆不在校园边界内:', bike.id, bike.lat, bike.lng);
+            }
+            return inside;
+        })
+        .map(bike => {
+            try {
+                // 尝试吸附到最近的路网节点
+                if (Object.keys(realRoadNetwork.nodes).length > 0) {
+                    const snapped = snapToNearestRoad(bike.lat, bike.lng);
+                    // 确保吸附后的位置仍然在校园边界内
+                    if (isInsideBoundary(snapped.lat, snapped.lng)) {
+                        return {
+                            ...bike,
+                            lat: snapped.lat,
+                            lng: snapped.lng
+                        };
+                    }
+                }
+            } catch (error) {
+                console.warn('吸附到路网失败，使用原始位置:', error, bike.id);
+            }
+            return bike;
+        });
+    
+    console.log('筛选后的低电量车辆数:', filteredBikes.length);
+    return { bikes: filteredBikes, source: 'api' };
 }
 
 function buildRoadNetworkFromGeoJSON(geojson) {
@@ -10156,7 +12941,7 @@ function initMockRoadNetwork() {
 }
 
 function loadRealRoadNetwork() {
-    return fetch(API_BASE + 'roads', { cache: 'no-store' })
+    return fetch('data/WHUInfo_Roads_Filtered.geojson', { cache: 'no-store' })
         .then(response => {
             if (!response.ok) {
                 throw new Error('HTTP ' + response.status);
@@ -10225,6 +13010,58 @@ function getRandomRoadNode() {
     return realRoadNetwork.nodes[nodeId];
 }
 
+// 将点吸附到最近的路网节点（如果距离在阈值内），否则略微偏移
+function snapToNearestRoad(lat, lng, maxSnapDistance = 50) {
+    // 检查路网节点数量
+    const nodeCount = Object.keys(realRoadNetwork.nodes).length;
+    if (nodeCount === 0) {
+        console.warn('路网节点为空，使用默认位置');
+        // 使用校园中心点作为默认位置
+        return {
+            lat: CAMPUS_CENTER_BD09[1],
+            lng: CAMPUS_CENTER_BD09[0],
+            snapped: false
+        };
+    }
+    
+    // 找到最近的有邻居的路网节点
+    let nearestNodeId = null;
+    let minDistance = Infinity;
+    let nearestNode = null;
+    
+    Object.entries(realRoadNetwork.nodes).forEach(([nodeId, node]) => {
+        // 只考虑有邻居的节点
+        if (node.neighbors && node.neighbors.length > 0) {
+            const distance = calcDistanceMeters(lat, lng, node.lat, node.lng);
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearestNodeId = nodeId;
+                nearestNode = node;
+            }
+        }
+    });
+    
+    if (!nearestNodeId || !nearestNode) {
+        console.warn('未找到有邻居的路网节点，使用默认位置');
+        // 使用校园中心点作为默认位置
+        return {
+            lat: CAMPUS_CENTER_BD09[1],
+            lng: CAMPUS_CENTER_BD09[0],
+            snapped: false
+        };
+    }
+    
+    console.log(`车辆位置 (${lat}, ${lng}) 最近的有邻居的路网节点 (${nearestNode.lat}, ${nearestNode.lng}) 距离: ${minDistance.toFixed(2)}米`);
+    
+    // 直接吸附到有邻居的路网节点
+    console.log(`吸附到有邻居的路网节点，距离: ${minDistance.toFixed(2)}米`);
+    return {
+        lat: nearestNode.lat,
+        lng: nearestNode.lng,
+        snapped: true
+    };
+}
+
 function findPathBFS(startNode, endNode) {
     if (!startNode || !endNode || !realRoadNetwork.nodes[startNode] || !realRoadNetwork.nodes[endNode]) {
         return [];
@@ -10282,7 +13119,7 @@ function findPathOnRoads(startLat, startLng, endLat, endLng) {
 function buildEbikeInfoHtml(ebike) {
     return `
         <div class="popup-content">
-            <div class="popup-title">电单车 ${ebike.id}</div>
+            <div class="popup-title">电动车 ${ebike.id}</div>
             <div class="popup-row"><span class="popup-label">状态</span><span class="popup-value">${ebike.status === 'idle' ? '空闲' : '移动'}</span></div>
             <div class="popup-row"><span class="popup-label">电量</span><span class="popup-value">${Math.max(0, Math.round(ebike.battery))}%</span></div>
             <div class="popup-row"><span class="popup-label">速度</span><span class="popup-value">${Math.round(ebike.speed || 0)} km/h</span></div>
@@ -10290,7 +13127,7 @@ function buildEbikeInfoHtml(ebike) {
     `;
 }
 
-// 生成电单车模拟
+// 生成电动车模拟
 function generateEbikeSimulation() {
     if (!map) {
         showToast('地图尚未初始化，请先登录系统');
@@ -10304,7 +13141,7 @@ function generateEbikeSimulation() {
         || document.getElementById('simulation-level')?.value
         || 'medium';
 
-    showProgress('正在生成电单车模拟数据...');
+    showProgress('正在生成电动车模拟数据...');
 
     ensureEbikeRoadNetwork()
         .then(() => fetch(`${API_BASE}bike-simulation?time=${timeSlot}&level=${dataLevel}`, { cache: 'no-store' }))
@@ -10320,10 +13157,14 @@ function generateEbikeSimulation() {
                 .map((bike, idx) => {
                     const normalized = normalizeBikeToBd09(bike.lng, bike.lat);
                     if (!normalized) return null;
+                    // 检查是否在信息学部边界内
+                    if (!isInsideBoundary(normalized.lat, normalized.lng)) return null;
+                    // 吸附到最近的路网节点
+                    const snapped = snapToNearestRoad(normalized.lat, normalized.lng);
                     return {
                         id: 'ebike_' + (bike.id || (idx + 1)),
-                        lat: normalized.lat,
-                        lng: normalized.lng,
+                        lat: snapped.lat,
+                        lng: snapped.lng,
                         status: bike.status || (Math.random() > 0.3 ? 'idle' : 'moving'),
                         speed: Number(bike.speed) || (bike.status === 'moving' ? 15 : 0),
                         battery: Number(bike.battery) || 100,
@@ -10337,14 +13178,14 @@ function generateEbikeSimulation() {
 
             renderEbikeSimulation(ebikeData, timeSlot, dataLevel, Number(data?.count) || ebikeData.length);
             hideProgress();
-            showToast(`电单车模拟数据生成完成，共 ${ebikeData.length} 辆`);
+            showToast(`电动车模拟数据生成完成，共 ${ebikeData.length} 辆`);
 
             setTimeout(() => {
                 toggleEbikeAnimation();
             }, 300);
         })
         .catch(error => {
-            console.error('读取电单车模拟数据失败:', error);
+            console.error('读取电动车模拟数据失败:', error);
             const counts = { low: 50, medium: 100, high: 150 };
             const count = counts[dataLevel] || 100;
             const ebikeData = generateMockEbikeData(count, timeSlot);
@@ -10361,21 +13202,31 @@ function generateMockEbikeData(count, timeSlot) {
     const data = [];
     const heatZones = MOCK_HEATMAP_DATA[timeSlot] || MOCK_HEATMAP_DATA.morning || [];
 
-    for (let i = 0; i < count; i++) {
+    let attempts = 0;
+    const maxAttempts = count * 5; // 最多尝试5倍次数
+
+    while (data.length < count && attempts < maxAttempts) {
+        attempts++;
         const zone = heatZones.length ? heatZones[Math.floor(Math.random() * heatZones.length)] : [30.533, 114.365, 60];
         const latRaw = zone[0] + (Math.random() - 0.5) * 0.001;
         const lngRaw = zone[1] + (Math.random() - 0.5) * 0.001;
         const normalized = normalizeBikeToBd09(lngRaw, latRaw);
         if (!normalized) continue;
+        
+        // 检查是否在信息学部边界内
+        if (!isInsideBoundary(normalized.lat, normalized.lng)) continue;
+        
+        // 吸附到最近的路网节点
+        const snapped = snapToNearestRoad(normalized.lat, normalized.lng);
 
         const moving = Math.random() > 0.35;
         const minutesAgo = Math.floor(Math.random() * 180);
         const lastUsedAt = new Date(Date.now() - minutesAgo * 60000);
         const pad = n => String(n).padStart(2, '0');
         data.push({
-            id: 'ebike_' + (i + 1),
-            lat: normalized.lat,
-            lng: normalized.lng,
+            id: 'ebike_' + (data.length + 1),
+            lat: snapped.lat,
+            lng: snapped.lng,
             status: moving ? 'moving' : 'idle',
             battery: Math.floor(35 + Math.random() * 65),
             speed: moving ? Math.floor(12 + Math.random() * 14) : 0,
@@ -10410,7 +13261,7 @@ function renderEbikeSimulation(ebikeData, timeSlot, dataLevel, count) {
             marker = new BMap.Marker(point);
         }
 
-        marker.setTitle('电单车 ' + ebike.id);
+        marker.setTitle('电动车 ' + ebike.id);
         marker.addEventListener('click', function() {
             const infoWindow = new BMap.InfoWindow(buildEbikeInfoHtml(ebike), {
                 width: 220,
@@ -10463,13 +13314,26 @@ function renderEbikeSimulation(ebikeData, timeSlot, dataLevel, count) {
     }
     if (statusEl) statusEl.textContent = '未播放';
 
+    // 动态更新系统概览中的系统状态
+    const totalCount = count || ebikeData.length;
+    const availableCount = ebikeData.filter(b => b.status === 'idle' && b.battery >= 50).length;
+    let lowBatteryCount = ebikeData.filter(b => b.battery < 50).length;
+    let demandCount = Math.floor(totalCount * 0.45);
+    
+    // 限制数值范围，避免异常值
+    lowBatteryCount = Math.min(lowBatteryCount, 100);
+    demandCount = Math.min(demandCount, 500);
+    
+    // 调用统一的更新函数
+    updateSystemStatus(lowBatteryCount, demandCount);
+
     syncSimulationButtons();
 }
 
-// 切换电单车动画
+// 切换电动车动画
 function toggleEbikeAnimation() {
     if (ebikeSimData.length === 0) {
-        showToast('请先生成电单车模拟数据');
+        showToast('请先生成电动车模拟数据');
         return;
     }
 
@@ -10478,7 +13342,7 @@ function toggleEbikeAnimation() {
         showToast('动画已暂停');
     } else {
         startEbikeAnimation();
-        showToast('电单车动画已开始');
+        showToast('电动车动画已开始');
     }
 }
 
@@ -10621,7 +13485,7 @@ function stopEbikeAnimation() {
     syncSimulationButtons();
 }
 
-// 清除电单车模拟
+// 清除电动车模拟
 function clearEbikeSimulation(silent) {
     stopEbikeAnimation();
 
@@ -10657,11 +13521,11 @@ function clearEbikeSimulation(silent) {
     syncSimulationButtons();
 
     if (!silent) {
-        showToast('电单车模拟已清除');
+        showToast('电动车模拟已清除');
     }
 }
 
-// 筛选低电量车辆（独立于电单车模拟模块）
+// 筛选低电量车辆（独立于电动车模拟模块）
 async function filterLowBattery() {
     if (currentUserRole !== 'admin') {
         showToast('当前角色无权限执行电池运维操作');
@@ -10696,7 +13560,8 @@ async function filterLowBattery() {
     clearBatteryRouteLines();
     batteryRouteAssignments = {};
     batteryLastRouteResult = null;
-    currentLowBatteryList = lowBattery.slice();
+    // 限制低电量车辆数，避免异常值
+currentLowBatteryList = lowBattery.slice(0, 100);
     updateLowBatteryMetric(lowBattery.length);
     updateBatteryResultPanel({
         lowCount: lowBattery.length,
@@ -10721,68 +13586,147 @@ async function filterLowBattery() {
     } else {
         showToast(`已筛选出 ${lowBattery.length} 辆低电量车辆`);
     }
+
+    // 更新系统状态
+    if (typeof updateSystemStatus === 'function') {
+        updateSystemStatus();
+    }
 }
 
 // 生成换电任务路线（后端负责核心分组与路网规划）
 async function generateBatteryRoute() {
-    if (currentUserRole !== 'admin') {
-        showToast('当前角色无权限执行电池运维操作');
-        return;
-    }
-
     if (!map) {
         showToast('地图尚未初始化');
         return;
     }
 
-    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
-    const capacity = getBatteryCapacityValue();
-    let lowBattery = currentLowBatteryList.slice();
-
-    if (lowBattery.length === 0) {
-        try {
-            const result = await getLowBatteryCandidates(threshold);
-            lowBattery = result.bikes;
-        } catch (err) {
-            console.error('读取低电量数据失败:', err);
-            showToast('读取低电量数据失败，无法生成路线');
-            return;
+    // 如果是调度员，只显示分配给自己的路线
+    if (currentUserRole === 'dispatcher') {
+        const dispatcherBatteryRoutes = getDispatcherBatteryRoutes();
+        if (dispatcherBatteryRoutes.length > 0) {
+            // 从batteryLastRouteResult中过滤出分配给自己的路线
+            if (batteryLastRouteResult && batteryLastRouteResult.routes) {
+                const myRouteNames = dispatcherBatteryRoutes.map(r => r.route_id);
+                const filteredRoutes = batteryLastRouteResult.routes.filter(route => {
+                    return myRouteNames.includes(route.route_id);
+                });
+                if (filteredRoutes.length > 0) {
+                    clearBatteryRouteLines();
+                    drawBatteryRoute({ ...batteryLastRouteResult, routes: filteredRoutes }, currentLowBatteryList.length, { silentToast: true });
+                    showToast(`已显示分配给您的 ${filteredRoutes.length} 条换电路线`);
+                } else {
+                    showToast('您还没有被分配换电路线');
+                }
+            } else {
+                showToast('尚无换电路线数据，请等待管理员生成');
+            }
+        } else {
+            showToast('您还没有被分配换电路线');
         }
+        return;
     }
 
-    currentLowBatteryList = lowBattery.slice();
+    if (currentUserRole !== 'admin') {
+        showToast('当前角色无权限执行电池运维操作');
+        return;
+    }
+
+    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const capacity = getBatteryCapacityValue();
+    
+    // 每次生成路线时都重新获取低电量车辆数据并吸附到路网，确保使用最新的路网吸附数据
+    let lowBattery;
+    try {
+        console.log('开始获取低电量车辆数据，阈值:', threshold);
+        const result = await getLowBatteryCandidates(threshold);
+        console.log('获取低电量车辆数据成功，结果:', result);
+        lowBattery = result.bikes;
+        console.log('低电量车辆数据:', {
+            length: lowBattery.length,
+            sample: lowBattery[0]
+        });
+    } catch (err) {
+        console.error('读取低电量数据失败:', err);
+        showToast('读取低电量数据失败，无法生成路线');
+        return;
+    }
+
+    try {
+        // 限制低电量车辆数，避免异常值
+currentLowBatteryList = lowBattery.slice(0, 100);
+        console.log('设置当前低电量车辆列表成功');
+    } catch (err) {
+        console.error('设置当前低电量车辆列表失败:', err);
+        showToast('设置低电量车辆列表失败，无法生成路线');
+        return;
+    }
 
     if (lowBattery.length === 0) {
         showToast('无低电量车辆可生成路线');
         return;
     }
 
-    clearBatteryRouteLines();
+    try {
+        clearBatteryRouteLines();
+        console.log('清除换电路线路线成功');
+    } catch (err) {
+        console.error('清除换电路线路线失败:', err);
+        showToast('清除换电路线路线失败，无法生成路线');
+        return;
+    }
 
     // 按新规则：所有换电运维车统一从校园中心补给点出发并回到同一终点
     const servicePoints = [
         { lng: CAMPUS_CENTER_BD09[0], lat: CAMPUS_CENTER_BD09[1], name: '校园中心补给点' }
     ];
+    console.log('服务点:', servicePoints);
 
     try {
+        const requestData = {
+            bikes: lowBattery.map(b => ({ id: b.id, lng: b.lng, lat: b.lat, battery: b.battery, last_used: b.last_used })),
+            service_points: servicePoints,
+            threshold,
+            capacity_per_trip: capacity
+        };
+        console.log('发送换电路线请求:', {
+            bikeCount: requestData.bikes.length,
+            servicePointCount: requestData.service_points.length,
+            threshold: requestData.threshold,
+            capacity: requestData.capacity_per_trip,
+            sampleBike: requestData.bikes[0]
+        });
+        
         const response = await fetch('/api/battery/route', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                bikes: lowBattery.map(b => ({ id: b.id, lng: b.lng, lat: b.lat, battery: b.battery, last_used: b.last_used })),
-                service_points: servicePoints,
-                threshold,
-                capacity_per_trip: capacity
-            })
+            body: JSON.stringify(requestData)
         });
+        
+        console.log('换电路线响应状态:', response.status);
+        
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+            // 尝试获取错误信息
+            try {
+                const errorData = await response.json();
+                console.error('换电路线错误响应:', errorData);
+                throw new Error(`HTTP ${response.status}: ${errorData.error || 'Unknown error'}`);
+            } catch (e) {
+                console.error('无法解析错误响应:', e);
+                throw new Error(`HTTP ${response.status}`);
+            }
         }
+        
         const data = await response.json();
+        console.log('换电路线响应数据:', {
+            routeCount: data.routes?.length || 0,
+            vehicleCount: data.vehicle_count || 0,
+            bikeCount: data.bike_count || 0
+        });
+        
         drawBatteryRoute(data, lowBattery.length);
     } catch (err) {
         console.error('生成换电路线失败:', err);
-        showToast('生成换电路线失败，请稍后重试');
+        showToast(`生成换电路线失败: ${err.message}`);
     }
 }
 
@@ -10831,7 +13775,7 @@ function getRouteMarkerDisplayPoint(basePoint, routeIndex, routeCount, markerTyp
     return offsetPointByMeters(basePoint, east, north);
 }
 
-function addBatteryRouteArrows(routePoints, color) {
+function addBatteryRouteArrows(routePoints, color, polyline) {
     if (!Array.isArray(routePoints) || routePoints.length < 2 || typeof BMap === 'undefined') {
         return;
     }
@@ -10845,7 +13789,7 @@ function addBatteryRouteArrows(routePoints, color) {
         try {
             const angle = calcDirectionAngle(prev, curr);
             const arrowSymbol = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
-                scale: 0.65,
+                scale: 0.8,
                 strokeWeight: 1,
                 strokeColor: color,
                 fillColor: color,
@@ -10853,6 +13797,8 @@ function addBatteryRouteArrows(routePoints, color) {
                 rotation: angle + BATTERY_ARROW_ROTATION_OFFSET
             });
             const arrowMarker = new BMap.Marker(new BMap.Point(curr.lng, curr.lat), { icon: arrowSymbol });
+            arrowMarker.setZIndex(9900); // 设置较低的zIndex，确保在路线下方、车辆上方
+            arrowMarker.parentPolyline = polyline; // 保存父路线引用，便于联动
             map.addOverlay(arrowMarker);
             batteryRouteLines.push(arrowMarker);
         } catch (_) {
@@ -10930,92 +13876,182 @@ function getDispatcherScopedBikes(route, scopedAssignments) {
 function setBatteryRouteDetailHint(text) {
     const detailEl = document.getElementById('battery-route-detail');
     if (detailEl) {
-        detailEl.textContent = text;
+        if (currentUserRole === 'admin' && (text.includes('当前未分配路线') || text.includes('未分配'))) {
+            detailEl.textContent = '';
+        } else if (text.includes('当前未分配路线') || text.includes('未分配')) {
+            detailEl.innerHTML = '<span style="color:#dc3545;font-weight:bold;font-size:14px;background:#fff0f0;padding:8px 12px;border-radius:6px;border:2px solid #dc3545;display:inline-block;">' + text + '</span>';
+        } else {
+            detailEl.textContent = text;
+        }
     }
 }
 
-function applyDispatcherVehicleFilter(options) {
+function setDispatchRouteDetailHint(text) {
+    const detailEl = document.getElementById('dispatch-route-detail');
+    if (detailEl) {
+        if (currentUserRole === 'admin' && (text.includes('请先运行调度优化') || text.includes('当前未分配路线') || text.includes('未分配'))) {
+            detailEl.textContent = '';
+            detailEl.className = 'dispatch-info';
+        } else if (text.includes('当前未分配路线') || text.includes('未分配')) {
+            detailEl.innerHTML = '<span style="color:#dc3545;font-weight:bold;font-size:14px;background:#fff0f0;padding:8px 12px;border-radius:6px;border:2px solid #dc3545;display:inline-block;">' + text + '</span>';
+            detailEl.className = 'dispatch-info';
+        } else {
+            detailEl.textContent = text;
+            detailEl.className = 'dispatch-info';
+        }
+    }
+}
+
+async function tryBootstrapDispatcherBatteryTasks() {
+    // 先尝试从localStorage加载之前保存的路线结果
+    const storedBatteryResult = localStorage.getItem('batteryLastRouteResult');
+    if (storedBatteryResult) {
+        try {
+            const routeData = JSON.parse(storedBatteryResult);
+            if (Array.isArray(routeData?.routes) && routeData.routes.length > 0) {
+                batteryLastRouteResult = routeData;
+                batteryRouteAssignments = routeData?.bike_assignments && typeof routeData.bike_assignments === 'object'
+                    ? routeData.bike_assignments
+                    : {};
+                persistBatteryOpsSnapshot();
+                return true;
+            }
+        } catch (error) {
+            console.error('从localStorage加载电池路线失败:', error);
+        }
+    }
+
+    // 如果localStorage中没有数据，再从后端获取
+    const threshold = Number(document.getElementById('battery-threshold')?.value) || 30;
+    const capacity = Math.max(1, getBatteryCapacityValue());
+    const servicePoints = [
+        { lng: CAMPUS_CENTER_BD09[0], lat: CAMPUS_CENTER_BD09[1], name: '校园中心补给点' }
+    ];
+
+    try {
+        const lowResult = await getLowBatteryCandidates(threshold);
+        const lowBattery = Array.isArray(lowResult?.bikes) ? lowResult.bikes : [];
+        // 限制低电量车辆数，避免异常值
+currentLowBatteryList = lowBattery.slice(0, 100);
+
+        if (!lowBattery.length) {
+            batteryLastRouteResult = null;
+            batteryRouteAssignments = {};
+            persistBatteryOpsSnapshot();
+            return false;
+        }
+
+        const response = await fetch('/api/battery/route', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                bikes: lowBattery.map(b => ({
+                    id: b.id,
+                    lng: b.lng,
+                    lat: b.lat,
+                    battery: b.battery,
+                    last_used: b.last_used
+                })),
+                service_points: servicePoints,
+                threshold,
+                capacity_per_trip: capacity
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        const routeData = await response.json();
+        if (!Array.isArray(routeData?.routes) || routeData.routes.length === 0) {
+            batteryLastRouteResult = null;
+            batteryRouteAssignments = {};
+            persistBatteryOpsSnapshot();
+            return false;
+        }
+
+        batteryLastRouteResult = routeData;
+        batteryRouteAssignments = routeData?.bike_assignments && typeof routeData.bike_assignments === 'object'
+            ? routeData.bike_assignments
+            : {};
+        persistBatteryOpsSnapshot();
+        return true;
+    } catch (error) {
+        console.error('调度员兜底加载换电任务失败:', error);
+        return false;
+    }
+}
+
+async function applyDispatcherVehicleFilter(options) {
     const opts = options || {};
     if (currentUserRole === 'admin') {
         return;
     }
 
-    const input = document.getElementById('battery-dispatch-vehicle-id');
     const tbody = document.getElementById('battery-table-body');
     const allRoutes = Array.isArray(batteryLastRouteResult?.routes) ? batteryLastRouteResult.routes : [];
     const allAssignments = batteryLastRouteResult?.bike_assignments && typeof batteryLastRouteResult.bike_assignments === 'object'
         ? batteryLastRouteResult.bike_assignments
         : {};
 
-    const vehicleKey = String(opts.vehicleKey != null ? opts.vehicleKey : (input?.value || '')).trim();
-    dispatcherSelectedVehicleKey = vehicleKey;
-    if (input && opts.vehicleKey != null) {
-        input.value = vehicleKey;
-    }
-
     if (!allRoutes.length) {
-        clearBatteryRouteLines();
-        clearLowBatteryMarkers();
-        updateLowBatteryMetric(0);
-        batteryRouteAssignments = {};
-        if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">暂无可查看的换电任务</td></tr>';
+        if (!opts.skipBootstrap) {
+            const bootstrapped = await tryBootstrapDispatcherBatteryTasks();
+            if (bootstrapped) {
+                await applyDispatcherVehicleFilter({
+                    ...opts,
+                    skipBootstrap: true,
+                    silent: true,
+                    noInputToast: opts.noInputToast
+                });
+                return;
+            }
         }
-        updateBatteryResultPanel({
-            lowCount: 0,
-            vehicleCount: 0,
-            routeCount: 0,
-            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
-            routes: []
-        });
-        setBatteryRouteDetailHint('管理员尚未下发可查看的换电任务');
-        return;
-    }
 
-    if (!vehicleKey) {
         clearBatteryRouteLines();
         clearLowBatteryMarkers();
         updateLowBatteryMetric(0);
         batteryRouteAssignments = {};
         if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">请输入负责运维车编号后查看</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">当前未分配路线！</td></tr>';
         }
         updateBatteryResultPanel({
             lowCount: 0,
             vehicleCount: 0,
             routeCount: 0,
-            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
+            capacityPerTrip: 0,
             routes: []
         });
-        setBatteryRouteDetailHint('请输入负责运维车编号后查看路线明细');
-        if (!opts.noInputToast && !opts.silent) {
-            showToast('请输入负责运维车编号');
-        }
-        if (!opts.skipPersist) {
-            persistBatteryOpsSnapshot();
-        }
-        return;
-    }
-
-    const matchedRoute = allRoutes.find(route => routeMatchesVehicleKey(route, vehicleKey));
-    if (!matchedRoute) {
-        clearBatteryRouteLines();
-        clearLowBatteryMarkers();
-        updateLowBatteryMetric(0);
-        batteryRouteAssignments = {};
-        if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">未找到该运维车对应路线，请检查编号</td></tr>';
-        }
-        updateBatteryResultPanel({
-            lowCount: 0,
-            vehicleCount: 0,
-            routeCount: 0,
-            capacityPerTrip: batteryLastRouteResult?.capacity_per_trip || getBatteryCapacityValue(),
-            routes: []
-        });
-        setBatteryRouteDetailHint('未匹配到负责路线，请确认运维车编号');
+        setBatteryRouteDetailHint('当前未分配路线！');
         if (!opts.silent) {
-            showToast('未找到该运维车对应路线');
+            showToast('当前未分配路线！');
+        }
+        return;
+    }
+
+    // 获取分配给当前调度员的电池运维任务
+    const storedBatteryAssignments = localStorage.getItem('batteryAssignments');
+    const batteryAssignments = storedBatteryAssignments ? JSON.parse(storedBatteryAssignments) : [];
+    const myBatteryAssignments = batteryAssignments.filter(a => a.dispatcher_id === currentUsername);
+
+    if (myBatteryAssignments.length === 0) {
+        clearBatteryRouteLines();
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        batteryRouteAssignments = {};
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">当前未分配路线！</td></tr>';
+        }
+        updateBatteryResultPanel({
+            lowCount: 0,
+            vehicleCount: 0,
+            routeCount: 0,
+            capacityPerTrip: 0,
+            routes: []
+        });
+        setBatteryRouteDetailHint('当前未分配路线！');
+        if (!opts.silent) {
+            showToast('当前未分配路线！');
         }
         if (!opts.skipPersist) {
             persistBatteryOpsSnapshot();
@@ -11023,35 +14059,86 @@ function applyDispatcherVehicleFilter(options) {
         return;
     }
 
-    const scopedAssignments = buildScopedAssignmentsForRoute(matchedRoute, allAssignments);
-    const scopedBikes = getDispatcherScopedBikes(matchedRoute, scopedAssignments);
+    // 过滤出分配给当前调度员的路线
+    const myVehicleIds = myBatteryAssignments.map(a => a.vehicle_id);
+    
+    const matchedRoutes = allRoutes.filter(route => 
+        myVehicleIds.some(vid => String(route.vehicle_id) === String(vid))
+    );
+
+    if (matchedRoutes.length === 0) {
+        clearBatteryRouteLines();
+        clearLowBatteryMarkers();
+        updateLowBatteryMetric(0);
+        batteryRouteAssignments = {};
+        if (tbody) {
+            tbody.innerHTML = '<tr><td colspan="5" style="color:#999;padding:20px;">当前未分配路线！</td></tr>';
+        }
+        updateBatteryResultPanel({
+            lowCount: 0,
+            vehicleCount: 0,
+            routeCount: 0,
+            capacityPerTrip: 0,
+            routes: []
+        });
+        setBatteryRouteDetailHint('当前未分配路线！');
+        if (!opts.silent) {
+            showToast('当前未分配路线！');
+        }
+        if (!opts.skipPersist) {
+            persistBatteryOpsSnapshot();
+        }
+        return;
+    }
+
+    // 获取所有相关的车辆和分配
+    const allScopedBikes = [];
+    const allScopedAssignments = {};
+    matchedRoutes.forEach(matchedRoute => {
+        const scopedAssignments = buildScopedAssignmentsForRoute(matchedRoute, allAssignments);
+        const scopedBikes = getDispatcherScopedBikes(matchedRoute, scopedAssignments);
+        allScopedBikes.push(...scopedBikes);
+        Object.assign(allScopedAssignments, scopedAssignments);
+    });
+
     const scopedResult = {
-        routes: [matchedRoute],
-        vehicle_count: 1,
-        route_count: 1,
-        bike_count: scopedBikes.length,
-        capacity_per_trip: batteryLastRouteResult?.capacity_per_trip || matchedRoute?.capacity_per_trip || getBatteryCapacityValue(),
-        bike_assignments: scopedAssignments
+        routes: matchedRoutes,
+        vehicle_count: matchedRoutes.length,
+        route_count: matchedRoutes.length,
+        bike_count: allScopedBikes.length,
+        capacity_per_trip: batteryLastRouteResult?.capacity_per_trip || matchedRoutes[0]?.capacity_per_trip || getBatteryCapacityValue(),
+        bike_assignments: allScopedAssignments
     };
+    setBatteryCapacityValue(scopedResult.capacity_per_trip);
 
     clearBatteryRouteLines();
-    renderLowBatteryMarkers(scopedBikes);
-    updateLowBatteryMetric(scopedBikes.length);
-    drawBatteryRoute(scopedResult, scopedBikes.length, {
+    clearLowBatteryMarkers(); // 清除所有低电量车辆标记
+    updateLowBatteryMetric(allScopedBikes.length);
+    drawBatteryRoute(scopedResult, allScopedBikes.length, {
         silentToast: true,
         skipPersist: true,
         updateGlobalState: false,
-        tableBikes: scopedBikes
+        tableBikes: allScopedBikes
     });
 
+    updateBatteryResultPanel({
+        lowCount: allScopedBikes.length,
+        vehicleCount: matchedRoutes.length,
+        routeCount: matchedRoutes.length,
+        capacityPerTrip: scopedResult.capacity_per_trip,
+        routes: matchedRoutes
+    });
+    setBatteryRouteDetailHint(`已分配 ${matchedRoutes.length} 条路线`);
+
     if (!opts.silent) {
-        const vehicleName = matchedRoute?.vehicle_name || matchedRoute?.vehicle_id || vehicleKey;
-        showToast(`已切换到 ${vehicleName} 的负责路线`);
+        showToast(`已显示分配给您的 ${matchedRoutes.length} 条路线`);
     }
     if (!opts.skipPersist) {
         persistBatteryOpsSnapshot();
     }
 }
+
+
 
 function drawBatteryRoute(routeResult, totalBikes, options) {
     if (!map) return;
@@ -11066,21 +14153,32 @@ function drawBatteryRoute(routeResult, totalBikes, options) {
 
     routes.forEach((route, idx) => {
         const pts = Array.isArray(route?.points) ? route.points.map(normalizeRoutePoint).filter(Boolean) : route;
-        if (!pts || pts.length < 2) return;
+        if (!pts || pts.length < 2) {
+            return;
+        }
 
-        const color = route?.route_color || BATTERY_ROUTE_COLORS[idx % BATTERY_ROUTE_COLORS.length] || '#28a745';
+        const color = BATTERY_ROUTE_COLORS[idx % BATTERY_ROUTE_COLORS.length] || '#1a73e8';
         const routeName = route?.route_name || `换电任务路线${idx + 1}`;
         const vehicleName = route?.vehicle_name || `换电运维车${idx + 1}`;
 
-        const polyline = new BMap.Polyline(pts.map(p => new BMap.Point(p.lng, p.lat)), {
+        // 创建箭头符号
+        const arrowSymbol = new BMap.Symbol(BMap_Symbol_SHAPE_FORWARD_CLOSED_ARROW, {
+            scale: 0.8,
+            strokeWeight: 1,
             strokeColor: color,
-            strokeWeight: 4,
-            strokeOpacity: 0.85,
-            strokeStyle: 'solid'
+            fillColor: color,
+            fillOpacity: 0.9
         });
+
+        // 创建折线
+            const polyline = new BMap.Polyline(pts.map(p => new BMap.Point(p.lng, p.lat)), {
+                strokeColor: color,
+                strokeWeight: 4,
+                strokeOpacity: 0.85,
+                strokeStyle: 'solid'
+            });
         map.addOverlay(polyline);
         batteryRouteLines.push(polyline);
-        addBatteryRouteArrows(pts, color);
 
         const ordered = Array.isArray(route?.ordered_bikes) ? route.ordered_bikes : [];
         ordered.forEach((b, orderIdx) => {
@@ -11090,22 +14188,81 @@ function drawBatteryRoute(routeResult, totalBikes, options) {
                 vehicle_name: vehicleName,
                 service_order: Number(b?.service_order) || (orderIdx + 1)
             };
+            
+            // 添加低电量车辆标记
+            const lng = parseFloat(b.lng);
+            const lat = parseFloat(b.lat);
+            const batteryLevel = Number(b.battery) || 0;
+            
+            if (Number.isFinite(lng) && Number.isFinite(lat)) {
+                try {
+                    const bikePoint = new BMap.Point(lng, lat);
+                    // 使用与图例一致的SVG图标
+                    const bikeIcon = makeLowBatteryIcon(batteryLevel);
+                    const bikeMarker = new BMap.Marker(bikePoint, { icon: bikeIcon });
+                    
+                    bikeMarker.setZIndex(9990);
+                    map.addOverlay(bikeMarker);
+                    lowBatteryMarkers.push(bikeMarker);
+                } catch (error) {
+                    console.error('创建低电量车辆标记失败:', error);
+                }
+            }
         });
     });
 
     if (routes.length > 0) {
-        const sharedDepot = {
+        // 使用第一条路线的服务点坐标作为起终点标记位置（与后端返回的service_point一致）
+        const firstRoute = routes[0];
+        const depotCoord = firstRoute?.service_point || firstRoute?.start_point || {
             lng: CAMPUS_CENTER_BD09[0],
             lat: CAMPUS_CENTER_BD09[1]
         };
-        const depotMarker = new BMap.Marker(new BMap.Point(sharedDepot.lng, sharedDepot.lat));
+        let depotMarker;
         try {
-            const depotLabel = new BMap.Label('换电路线起终点', { offset: new BMap.Size(12, -16) });
-            depotLabel.setStyle({ borderColor: '#28a745', color: '#1f1f1f', backgroundColor: '#f3fff3' });
+            const depotIcon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+                scale: 2.8,
+                strokeWeight: 4,
+                strokeColor: '#8a5a00',
+                fillColor: '#ffb300',
+                fillOpacity: 1
+            });
+            depotMarker = new BMap.Marker(new BMap.Point(depotCoord.lng, depotCoord.lat), { icon: depotIcon });
+        } catch (_) {
+            depotMarker = new BMap.Marker(new BMap.Point(depotCoord.lng, depotCoord.lat));
+        }
+        try {
+            const depotLabel = new BMap.Label('换电路线起终点', { offset: new BMap.Size(14, -18) });
+            depotLabel.setStyle({ borderColor: '#ffb300', color: '#1f1f1f', backgroundColor: '#fff8e1' });
             depotMarker.setLabel(depotLabel);
         } catch (_) {}
+        depotMarker.setZIndex(9980);
         map.addOverlay(depotMarker);
         batteryRouteLines.push(depotMarker);
+
+        // 为每条路线也绘制起终点标记
+        routes.forEach((route, idx) => {
+            const routeDepotCoord = route?.service_point || route?.start_point;
+            if (!routeDepotCoord) return;
+
+            const routeColor = BATTERY_ROUTE_COLORS[idx % BATTERY_ROUTE_COLORS.length] || '#1a73e8';
+            let routeDepotMarker;
+            try {
+                const routeDepotIcon = new BMap.Symbol(BMap_Symbol_SHAPE_CIRCLE, {
+                    scale: 2.2,
+                    strokeWeight: 3,
+                    strokeColor: routeColor,
+                    fillColor: routeColor,
+                    fillOpacity: 0.9
+                });
+                routeDepotMarker = new BMap.Marker(new BMap.Point(routeDepotCoord.lng, routeDepotCoord.lat), { icon: routeDepotIcon });
+            } catch (_) {
+                routeDepotMarker = new BMap.Marker(new BMap.Point(routeDepotCoord.lng, routeDepotCoord.lat));
+            }
+            routeDepotMarker.setZIndex(9980);
+            map.addOverlay(routeDepotMarker);
+            batteryRouteLines.push(routeDepotMarker);
+        });
     }
 
     const tableBikes = Array.isArray(drawOptions.tableBikes) ? drawOptions.tableBikes : currentLowBatteryList;
@@ -11129,6 +14286,8 @@ function drawBatteryRoute(routeResult, totalBikes, options) {
     if (!drawOptions.skipPersist && updateGlobalState) {
         persistBatteryOpsSnapshot();
     }
+
+    updateLayerVisibility();
 
     if (!drawOptions.silentToast) {
         showToast(`已为 ${totalBikes} 辆低电量车辆生成换电任务路线`);
@@ -11170,11 +14329,12 @@ window.onload = function() {
         initLayerControl();
 
 
-        // 绑定电单车模拟模块按钮
+        // 绑定电动车模拟模块按钮
 
 
         bindSimulationModuleButtons();
         bindBatteryDispatcherControls();
+        initFeedbackModuleEvents();
         initAIPanelEvents();
 
 

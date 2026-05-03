@@ -4,40 +4,28 @@ import numpy as np
 import os
 import geopandas as gpd
 import networkx as nx
+from .data_utils import load_and_process_roads
 
 # 构建可通行的路网
-def build_whu_road_graph(road_geojson='data_bd09/WHUInfo_Roads.geojson'):
+def build_whu_road_graph(road_geojson='data/WHUInfo_Roads.geojson'):
     print("正在构建可通行的路网...")
     
     # 使用绝对路径
-    import os
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     file_path = os.path.join(base_dir, road_geojson)
+    boundary_path = os.path.join(base_dir, 'data', 'WHUInfo.geojson')
     print(f"正在读取路网数据：{file_path}")
+    print(f"正在读取边界数据：{boundary_path}")
     
-    # 检查文件是否存在
-    if not os.path.exists(file_path):
-        print(f"   警告：路网文件 {file_path} 不存在")
+    # 使用数据处理工具加载并处理路网数据，使用WHUInfo.geojson作为边界
+    roads_gdf = load_and_process_roads(file_path, boundary_path)
+    if roads_gdf is None:
         return nx.Graph(), []
-    
-    try:
-        gdf = gpd.read_file(file_path)
-        gdf = gdf.to_crs('EPSG:4326')
-        print(f"   成功加载路网数据，共 {len(gdf)} 条")
-    except Exception as e:
-        print(f"   加载路网数据失败: {e}")
-        return nx.Graph(), []
-    
-    # 过滤 name 为空的道路
-    filtered_gdf = gdf
-    if 'name' in gdf.columns:
-        filtered_gdf = filtered_gdf[filtered_gdf['name'].notna()]
-        print(f"   过滤name为空的道路后：{len(filtered_gdf)} 条")
     
     # 构建图
     G = nx.Graph()
     
-    for _, row in filtered_gdf.iterrows():
+    for _, row in roads_gdf.iterrows():
         geom = row.geometry
         if hasattr(geom, 'geom_type'):
             if geom.geom_type == 'MultiLineString':

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -41,6 +42,14 @@ def _safe_text(value: Any, default: str = "") -> str:
         return default
     text = str(value).strip()
     return text if text else default
+
+
+def _display_text(value: Any, default: str) -> str:
+    text = _safe_text(value, default)
+    lowered = text.lower()
+    if "_" in text or re.search(r"[A-Za-z]", text) or lowered.startswith(("dispatcher", "vehicle", "route")):
+        return default
+    return text
 
 
 def _pct(value: Any) -> float:
@@ -80,9 +89,10 @@ def _extract_dispatch(payload: Dict[str, Any]) -> Dict[str, Any]:
     for idx, item in enumerate(routes):
         cleaned.append(
             {
-                "name": _safe_text(item.get("name"), f"路线{idx + 1}"),
-                "from": _safe_text(item.get("from"), "供应点"),
-                "to": _safe_text(item.get("to"), "需求点"),
+                "vehicle_id": _display_text(item.get("vehicle_id") or item.get("vehicle_name"), ""),
+                "name": _display_text(item.get("name"), f"路线{idx + 1}"),
+                "from": _display_text(item.get("from"), "供应点"),
+                "to": _display_text(item.get("to"), "需求点"),
                 "transfer": _to_int(item.get("transfer")),
                 "shortage": _to_int(item.get("shortage")),
                 "distance_m": _to_float(item.get("distance_m")),
@@ -107,10 +117,26 @@ def _extract_metrics(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_battery(payload: Dict[str, Any]) -> Dict[str, Any]:
     battery = payload.get("battery") or {}
+    routes = battery.get("routes") or []
+    cleaned_routes = []
+    for idx, item in enumerate(routes):
+        cleaned_routes.append(
+            {
+                "name": _safe_text(item.get("name"), f"换电路线{idx + 1}"),
+                "vehicle_name": _safe_text(item.get("vehicle_name") or item.get("vehicle_id"), f"换电运维车{idx + 1}"),
+                "start": _safe_text(item.get("start"), "补给点"),
+                "end": _safe_text(item.get("end"), "补给点"),
+                "service_count": _to_int(item.get("service_count")),
+                "distance_m": _to_float(item.get("distance_m")),
+            }
+        )
+
     return {
         "low_battery_count": _to_int(battery.get("low_battery_count")),
-        "route_count": _to_int(battery.get("route_count")),
+        "route_count": max(_to_int(battery.get("route_count")), len(cleaned_routes)),
         "capacity_per_trip": _to_int(battery.get("capacity_per_trip")),
+        "total_distance_m": _to_float(battery.get("total_distance_m")),
+        "routes": cleaned_routes,
     }
 
 
@@ -187,7 +213,7 @@ def _top_route_sentence(dispatch: Dict[str, Any]) -> str:
         return "当前尚未形成调度路线。"
     top = ranked[0]
     return (
-        f"当前优先级最高的是{top['name']}，建议优先处理“{top['from']}→{top['to']}”，"
+        f"当前优先级最高的是{top['name']}，建议优先处理\"{top['from']}->{top['to']}\"，"
         f"转运{top['transfer']}辆，关联缺口{top['shortage']}辆，路线长度约{round(top['distance_m'])}米。"
     )
 
@@ -199,6 +225,8 @@ def _risk_bullets(metrics: Dict[str, Any], dispatch: Dict[str, Any], battery: Di
     avg_distance = metrics.get("avg_distance", 0.0)
     balance = metrics.get("balance", 0.0)
     low_battery_count = max(metrics.get("low_battery_count", 0), battery.get("low_battery_count", 0))
+    battery_route_count = battery.get("route_count", 0)
+    battery_total_distance = battery.get("total_distance_m", 0.0)
     shortage_count = dispatch.get("shortage_count", 0)
     total_distance = dispatch.get("total_distance_m", 0.0)
 
@@ -225,6 +253,12 @@ def _risk_bullets(metrics: Dict[str, Any], dispatch: Dict[str, Any], battery: Di
         bullets.append(f"当前低电量车辆较多（{low_battery_count}辆），需同步安排换电运维。")
     elif low_battery_count > 0:
         bullets.append(f"当前有{low_battery_count}辆低电量车辆，建议结合调度任务分批处理。")
+
+    if battery_route_count > 0:
+        if battery_total_distance > 0:
+            bullets.append(f"已形成{battery_route_count}条换电路线，总距离约{round(battery_total_distance)}米，应关注换电运维与调度任务的时间冲突。")
+        else:
+            bullets.append(f"已形成{battery_route_count}条换电路线，应确认运维车容量和服务顺序是否满足当前低电量压力。")
 
     if compare:
         rec = compare.get("recommended_scheme", "none")
@@ -336,20 +370,47 @@ def generate_compare_report(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def generate_dispatch_priority(payload: Dict[str, Any]) -> Dict[str, Any]:
+    role = _safe_text(payload.get("role"), "admin")
     dispatch = _extract_dispatch(payload)
+    battery = _extract_battery(payload)
     routes = dispatch["routes"]
-    if not routes:
-        return {"bullets": ["当前未获取到调度路线，请先运行动态调度模块。"]}
-
-    ranked = _rank_routes(dispatch)
+    battery_routes = battery.get("routes", [])
+    
     bullets: List[str] = []
-    for idx, route in enumerate(ranked[:4]):
-        bullets.append(
-            f"优先级{idx + 1}：处理“{route['from']}→{route['to']}”，转运{route['transfer']}辆，缺口{route['shortage']}辆，路线约{round(route['distance_m'])}米。"
-        )
+    
+    # 分析调度路线
+    if routes:
+        ranked = _rank_routes(dispatch)
+        max_items = 3 if role == "dispatcher" else 4
+        for idx, route in enumerate(ranked[:max_items]):
+            route_label = _display_text(route.get("name") or route.get("vehicle_id"), f"路线{idx + 1}")
+            bullets.append(
+                f"优先级{idx + 1}：{route_label}，处理\"{route['from']}->{route['to']}\"，转运{route['transfer']}辆，缺口{route['shortage']}辆，路线约{round(route['distance_m'])}米，注意核对起终点车辆数量。"
+            )
+    
+    # 分析换电路线
+    if battery_routes:
+        if role == "dispatcher":
+            # 调度员只显示分配给自己的换电路线
+            for idx, route in enumerate(battery_routes[:2]):
+                bullets.append(
+                    f"换电任务{idx + 1}：{route['vehicle_name']}（{route['name']}），服务{route['service_count']}辆低电量车辆，路线约{round(route['distance_m'])}米，请按顺序完成换电。"
+                )
+        else:
+            # 管理员显示所有换电路线摘要
+            total_service = sum(r.get('service_count', 0) for r in battery_routes)
+            total_distance = sum(r.get('distance_m', 0) for r in battery_routes)
+            bullets.append(f"换电运维：共{battery.get('route_count', 0)}条路线，服务{total_service}辆低电量车辆，总距离约{round(total_distance)}米。")
+            for idx, route in enumerate(battery_routes[:2]):
+                bullets.append(
+                    f"换电任务{idx + 1}：{route['vehicle_name']}（{route['name']}），服务{route['service_count']}辆，路线约{round(route['distance_m'])}米。"
+                )
+    elif role == "dispatcher" and not routes:
+        # 调度员没有任何任务时
+        return {"bullets": ["当前未分配任何任务，请联系管理员分配调度路线或换电路线。"]}
 
     total_distance = dispatch.get("total_distance_m", 0.0)
-    if total_distance > 0:
+    if role != "dispatcher" and total_distance > 0:
         bullets.append(f"本轮调度总距离约{round(total_distance)}米，建议优先完成高缺口、短路径任务。")
 
     return {"bullets": bullets[:5]}
@@ -466,7 +527,7 @@ def generate_decision_answer(payload: Dict[str, Any]) -> Dict[str, Any]:
                 ranked = _rank_routes(dispatch)
                 if ranked:
                     top = ranked[0]
-                    lines.append(f"可先执行“{top['from']}→{top['to']}”，因为其转运量为{top['transfer']}辆，最适合快速见效。")
+                    lines.append(f"可先执行\"{top['from']}->{top['to']}\"，因为其转运量为{top['transfer']}辆，最适合快速见效。")
         else:
             lines.append("当前还没有调度结果，建议先运行动态调度后再生成快速缓解建议。")
 
@@ -478,10 +539,11 @@ def generate_decision_answer(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     low_battery_count = battery.get("low_battery_count", 0)
     if low_battery_count > 0:
+        route_count = battery.get("route_count", 0)
         if low_battery_count >= 10:
-            lines.append(f"同时需关注{low_battery_count}辆低电量车辆，避免选址和调度优化后因低电量造成可用运力下降。")
+            lines.append(f"同时需关注{low_battery_count}辆低电量车辆，当前已规划{route_count}条换电路线，避免选址和调度优化后因低电量造成可用运力下降。")
         else:
-            lines.append(f"当前有{low_battery_count}辆低电量车辆，可并行安排换电，不必单独作为首要矛盾。")
+            lines.append(f"当前有{low_battery_count}辆低电量车辆，可结合{route_count}条换电路线并行安排，不必单独作为首要矛盾。")
 
     if role == "dispatcher":
         lines.append("调度员执行时应优先处理系统已标记的高优先级任务，不建议临时改动整体方案。")
@@ -497,6 +559,22 @@ def _answer_known_question(question: str, context: Dict[str, Any]) -> Optional[s
     dispatch = _extract_dispatch({"dispatch": context.get("dispatch")})
     metrics = _extract_metrics({"metrics": context.get("metrics")})
     battery = _extract_battery({"battery": context.get("battery")})
+
+    if any(k in q for k in ["优先调度还是优先换电", "优先换电还是优先调度", "先调度还是先换电", "先换电还是先调度", "调度还是换电", "换电还是调度"]):
+        dispatch_routes = dispatch.get("routes", [])
+        shortage_count = dispatch.get("shortage_count", 0)
+        low_count = battery.get("low_battery_count", 0)
+        battery_routes = battery.get("route_count", 0)
+
+        if low_count >= 10 and shortage_count <= 1:
+            return f"建议优先换电。当前低电量车辆有{low_count}辆，已规划{battery_routes}条换电路线；若不先恢复可用电量，后续调度可用车辆会继续下降。"
+        if dispatch_routes and shortage_count >= 2:
+            return f"建议优先调度，并同步安排换电。当前有{shortage_count}个缺口点需要快速缓解，低电量车辆为{low_count}辆，可按已规划的{battery_routes}条换电路线并行处理。"
+        if dispatch_routes and low_count > 0:
+            return f"建议调度和换电并行：调度先处理已分配路线中的高缺口任务，换电按{battery_routes}条路线处理{low_count}辆低电量车辆。"
+        if low_count > 0:
+            return f"当前缺少明确调度路线，建议先按{battery_routes}条换电路线处理{low_count}辆低电量车辆。"
+        return "当前缺少调度路线和低电量换电上下文，建议先查看动态调度结果或电池运维路线。"
 
     if any(k in q for k in ["推荐", "哪套", "选哪", "方案", "智能还是人工"]):
         if compare:
@@ -570,6 +648,13 @@ def _answer_known_question(question: str, context: Dict[str, Any]) -> Optional[s
             return "当前未检测到明显的低电量车辆问题，暂无需优先安排换电运维。"
         route_count = battery.get("route_count", 0)
         cap = battery.get("capacity_per_trip", 0)
+        routes = battery.get("routes", [])
+        if routes:
+            top = routes[0]
+            return (
+                f"当前共有{count}辆低电量车辆，已规划{route_count}条换电路线，单次容量为{cap}。"
+                f"可先执行{top['vehicle_name']}的{top['name']}，服务{top['service_count']}辆，路线约{round(top['distance_m'])}米。"
+            )
         return f"当前共有{count}辆低电量车辆，已规划{route_count}条换电路线，单次容量为{cap}。建议优先完成已分配的换电任务。"
 
     if any(k in q for k in ["覆盖率", "覆盖"]):

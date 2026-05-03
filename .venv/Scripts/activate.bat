@@ -8,7 +8,7 @@ if defined _OLD_CODEPAGE (
     "%SystemRoot%\System32\chcp.com" 65001 > nul
 )
 
-set VIRTUAL_ENV=D:\jishe\campus_ebikeCom\campus_ebike\.venv
+set VIRTUAL_ENV=D:\jishe\campus_ebikeComFinal2\campus_ebike\.venv
 
 if not defined PROMPT set PROMPT=$P$G
 
